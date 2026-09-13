@@ -50,11 +50,6 @@ run `ollama pull qwen2.5:3b`, leave it running in the background.
 python -m src.api_client.rone_arena_client
 ```
 
-This is genuinely important to run and report back on — I built this
-wrapper from the API's documentation without being able to make live
-calls myself, so this is our first real check that the field
-extraction matches what the API actually returns.
-
 ## Project status
 
 - [x] Environment scaffold
@@ -245,23 +240,6 @@ Two sample notes are included (`data/raw/general/draft_priority_philosophy.md`
 and `data/raw/heroes/Lolita/counter_notes.md`) so you can test the
 pipeline immediately.
 
-## Testing note ingestion (Phase 2, reworked)
-
-```bash
-python -m src.rag.note_loader
-```
-
-Should report 2 documents loaded (the samples), correctly tagged with
-`hero_name: general` and `hero_name: Lolita`. I've verified the
-folder-discovery logic works correctly in my own environment already
-(without the LangChain dependency, which I can't install here) — this
-run is to confirm the full pipeline including LangChain's document
-loaders works end-to-end on your machine.
-
-Then run full ingestion:
-```bash
-python -m src.rag.ingest
-```
 
 ## Data source disclaimer
 
