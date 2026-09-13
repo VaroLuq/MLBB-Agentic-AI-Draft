@@ -93,13 +93,26 @@ self-repair loop). See README.md for full phase-by-phase status.
   Antivirus's HTTPS inspection injects its own root CA into the OS
   trust store, which Python's `requests`/`pip` don't consult by
   default (unlike the OS/browser/Node — `NODE_EXTRA_CA_CERTS` was
-  already set for Node for this reason). Fixed for the app via
-  `REQUESTS_CA_BUNDLE` in `.env` pointing at Norton's exported
-  `wscert.pem`; for `pip install` specifically, use `pip install
-  --cert <path>` instead (pip vendors its own requests/urllib3 and
-  doesn't read `REQUESTS_CA_BUNDLE`). If this project moves to a
-  machine without Norton, this whole issue likely disappears and the
-  env var becomes a no-op.
+  already set for Node for this reason).
+  CORRECTED FIX (supersedes an earlier version of this note): do NOT
+  set `REQUESTS_CA_BUNDLE` to Norton's cert file alone — that
+  replaces Python's *entire* trusted root store with just that one
+  cert. It worked initially, then broke the moment `arena.rone.dev`
+  was excluded from Norton's SSL scanning in Norton's own settings:
+  once Norton stops intercepting a domain, that domain presents its
+  real public CA-signed cert, which isn't trusted anymore because the
+  single-cert override replaced the normal CA store entirely — same
+  `SSLCertVerificationError`, opposite cause. Real fix:
+  `certs/combined_ca_bundle.pem` = certifi's public CA bundle +
+  Norton's cert, concatenated (`certs/` is gitignored, regenerate
+  per-machine — see `.env`'s comment for the exact command), with
+  `.env`'s `REQUESTS_CA_BUNDLE` pointing at that combined file via an
+  **absolute** path. This validates both intercepted and
+  Norton-excluded domains correctly. For `pip install` specifically,
+  use `pip install --cert <path-to-combined-bundle>` (pip vendors its
+  own requests/urllib3 and doesn't read `REQUESTS_CA_BUNDLE`). If this
+  project moves to a machine without Norton, this whole issue likely
+  disappears and the env var becomes a no-op (or can be removed).
 
 ## Conventions used throughout
 

@@ -3,6 +3,11 @@ venv/
 __pycache__/
 *.pyc
 
+# Machine-generated CA bundle (certifi + local AV root cert) — see
+# .env's REQUESTS_CA_BUNDLE comment. Regenerated per-machine, not
+# portable (embeds this machine's AV-specific cert), so not committed.
+certs/
+
 vectorstore/*
 !vectorstore/.gitkeep
 
