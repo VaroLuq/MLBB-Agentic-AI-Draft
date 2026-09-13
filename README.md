@@ -73,7 +73,7 @@ python -m src.api_client.rone_arena_client
       actually run unattended — see below.
 - [ ] Phase 7 (stretch): Eval harness
 
-## Using the dashboard (Phase 4)
+## Using the dashboard 
 
 Make sure Ollama is running, then:
 
@@ -88,7 +88,7 @@ inspect). The sidebar shows a live meta snapshot and lets you add new
 strategy notes and rebuild the knowledge base without leaving the
 browser.
 
-## Testing the Draft Agent (Phase 3)
+## Testing the Draft Agent 
 
 Make sure Ollama is running and you've ingested at least one note
 (Phase 2), then:
@@ -111,7 +111,7 @@ given the Lolita shield-counters-burst-comps note we seeded in Phase
 2? If the LLM's reasoning ignores that note, we may need to weight
 retrieved notes more heavily in the prompt.
 
-## Testing the Meta-Watcher agent (Phase 5)
+## Testing the Meta-Watcher agent 
 
 The live Rone Arena API only ever reflects a rolling window (e.g.
 "last 7 days") — it has no memory of where a hero's win/pick/ban rate
@@ -141,7 +141,7 @@ Every run (manual or scheduled) also appends its result to
 `data/snapshots/drift_log.txt`, timestamped — a durable, plain-text
 history that doesn't depend on n8n's own execution log retention.
 
-## Setting up n8n scheduling (Phase 6)
+## Setting up n8n scheduling 
 
 **Why Docker, and why an HTTP wrapper instead of Execute Command:**
 the original plan was `npx n8n` on the host with an Execute Command
