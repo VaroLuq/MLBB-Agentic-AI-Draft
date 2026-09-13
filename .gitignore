@@ -1,0 +1,15 @@
+.env
+venv/
+__pycache__/
+*.pyc
+
+vectorstore/*
+!vectorstore/.gitkeep
+
+data/raw/*
+!data/raw/.gitkeep
+
+data/snapshots/*
+!data/snapshots/.gitkeep
+
+.DS_Store
