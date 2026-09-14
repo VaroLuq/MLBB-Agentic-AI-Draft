@@ -1,4 +1,7 @@
+import socket
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -15,6 +18,9 @@ st.set_page_config(page_title="ML Draft Copilot", page_icon="", layout="wide")
 
 LANE_OPTIONS = ["any", "jungle", "gold", "exp", "mid", "roam"]
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+META_WATCHER_PORT = 8765
+
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_hero_names() -> list[str]:
@@ -28,7 +34,7 @@ def load_current_meta(size: int = 10) -> list[dict]:
 
 
 def list_all_notes() -> list[dict]:
-   
+
     notes = []
 
     if GENERAL_DIR.exists():
@@ -45,6 +51,106 @@ def list_all_notes() -> list[dict]:
                     notes.append({"path": path, "hero": hero_dir.name})
 
     return notes
+
+
+def is_meta_watcher_running(port: int = META_WATCHER_PORT, timeout: float = 1.0) -> bool:
+    """
+    Cheap TCP-connect check against the wrapper's port — avoids adding
+    a `requests` dependency just for a health check, and works
+    regardless of whether the process was started by this dashboard,
+    a terminal, or n8n's own testing earlier — status here always
+    reflects reality, not just "did I personally launch it."
+    """
+    try:
+        with socket.create_connection(("localhost", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def start_meta_watcher() -> None:
+    """
+    Launch src/agents/meta_watcher_server.py as a background
+    subprocess using the SAME python interpreter running this
+    Streamlit process (sys.executable), so it shares the venv and
+    picks up the same .env config. The Popen handle is stashed in
+    session_state so a later Stop click (in the same dashboard
+    session) can terminate it directly, without needing the
+    port-kill fallback in stop_meta_watcher().
+    """
+    process = subprocess.Popen(
+        [sys.executable, "-m", "src.agents.meta_watcher_server"],
+        cwd=str(PROJECT_ROOT),
+    )
+    st.session_state["_meta_watcher_process"] = process
+
+    # Give Flask a moment to actually bind the port before the caller
+    # re-checks status — without this, a Start click followed
+    # immediately by a status check would still show "stopped" even
+    # though the process is happily starting up.
+    for _ in range(10):
+        if is_meta_watcher_running():
+            break
+        time.sleep(0.3)
+
+
+def stop_meta_watcher() -> None:
+    """
+    Prefers terminating our own tracked subprocess handle (clean,
+    portable). Falls back to a Windows-specific port-based kill if
+    it's running but we have no handle for it — e.g. it was started
+    manually in a terminal before this dashboard session existed, or
+    a previous Streamlit rerun/restart lost the in-memory Popen
+    reference. This project already assumes Windows throughout
+    (run_dashboard.bat, the n8n/Docker setup notes), so a
+    Windows-only fallback here is consistent, not a new constraint.
+    """
+    process = st.session_state.get("_meta_watcher_process")
+    if process is not None and process.poll() is None:
+        process.terminate()
+        st.session_state.pop("_meta_watcher_process", None)
+        return
+
+    st.session_state.pop("_meta_watcher_process", None)
+    if sys.platform == "win32":
+        _kill_by_port_windows(META_WATCHER_PORT)
+
+
+def _kill_by_port_windows(port: int) -> None:
+    result = subprocess.run(
+        ["netstat", "-ano"], capture_output=True, text=True, check=False,
+    )
+    for line in result.stdout.splitlines():
+        if f":{port} " in line and "LISTENING" in line:
+            pid = line.strip().split()[-1]
+            subprocess.run(
+                ["taskkill", "/PID", pid, "/F"], capture_output=True, check=False,
+            )
+
+
+@st.dialog("Edit note")
+def edit_note_dialog(path: Path):
+    """
+    Modal popup for editing a note's raw text in place. Only wired up
+    for .md/.txt notes (same set the sidebar can already preview) —
+    editing PDF/DOCX content in a text box would mean rewriting the
+    file in a completely different format than it was uploaded in,
+    which isn't what "edit" should mean for those.
+    """
+    current_content = path.read_text(encoding="utf-8")
+    new_content = st.text_area("Note content", value=current_content, height=300)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Save", type="primary", use_container_width=True):
+            path.write_text(new_content, encoding="utf-8")
+            st.session_state["_note_notice"] = (
+                f"Updated {path.name}. Rebuild the knowledge base to apply the change."
+            )
+            st.rerun()
+    with col2:
+        if st.button("Cancel", use_container_width=True):
+            st.rerun()
 
 
 def main():
@@ -97,7 +203,30 @@ def main():
 
         st.divider()
 
+        st.header("Meta-Watcher")
+        st.caption("Local HTTP wrapper used by the n8n scheduling workflow "
+                   "(Phase 6) to trigger snapshot + drift checks.")
+        watcher_running = is_meta_watcher_running()
+        if watcher_running:
+            st.caption(f"Status: \U0001F7E2 Running on port {META_WATCHER_PORT}")
+            if st.button("Stop Meta-Watcher", use_container_width=True):
+                with st.spinner("Stopping..."):
+                    stop_meta_watcher()
+                st.rerun()
+        else:
+            st.caption("Status: ⚪ Stopped")
+            if st.button("Start Meta-Watcher", use_container_width=True):
+                with st.spinner("Starting..."):
+                    start_meta_watcher()
+                st.rerun()
+
+        st.divider()
+
         st.header("Browse Notes")
+
+        if "_note_notice" in st.session_state:
+            st.success(st.session_state.pop("_note_notice"))
+
         all_notes = list_all_notes()
         if not all_notes:
             st.caption("No notes yet. Add one above to get started.")
@@ -110,11 +239,40 @@ def main():
             selected_note = all_notes[note_labels.index(selected_label)]
 
             selected_path = selected_note["path"]
-            if selected_path.suffix.lower() in (".md", ".txt"):
+            is_editable = selected_path.suffix.lower() in (".md", ".txt")
+            if is_editable:
                 st.text(selected_path.read_text(encoding="utf-8"))
             else:
                 st.caption(f"Preview not available for {selected_path.suffix} "
                            f"files — open {selected_path} directly.")
+
+            delete_confirm_key = f"confirm_delete::{selected_path}"
+
+            if st.session_state.get(delete_confirm_key):
+                st.warning(f"Delete {selected_path.name}? This cannot be undone.")
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    if st.button("Yes, delete", type="primary", use_container_width=True):
+                        selected_path.unlink()
+                        st.session_state.pop(delete_confirm_key, None)
+                        st.session_state["_note_notice"] = (
+                            f"Deleted {selected_path.name}. Rebuild the knowledge "
+                            f"base to remove it from recommendations."
+                        )
+                        st.rerun()
+                with cancel_col:
+                    if st.button("Cancel", use_container_width=True):
+                        st.session_state.pop(delete_confirm_key, None)
+                        st.rerun()
+            else:
+                edit_col, delete_col = st.columns(2)
+                with edit_col:
+                    if st.button("Edit note", use_container_width=True, disabled=not is_editable):
+                        edit_note_dialog(selected_path)
+                with delete_col:
+                    if st.button("Delete note", use_container_width=True):
+                        st.session_state[delete_confirm_key] = True
+                        st.rerun()
 
     # --- Main: draft board ---
     st.subheader("Draft Board")

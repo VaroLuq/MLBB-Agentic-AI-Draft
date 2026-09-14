@@ -39,10 +39,13 @@ class DraftState(TypedDict, total=False):
     live_stats_summary: str
     retrieved_notes: str
     valid_lane_heroes: list[str] | None
+    lane_roster_text: str | None
     raw_llm_output: str
     parsed_recommendation: dict | None
     parse_error: str | None
     repair_attempts: int
+    raw_recommended_heroes: list[str]
+    constraint_violations: dict
 
 
 # --- Nodes ---
@@ -97,14 +100,27 @@ def gather_live_stats(state: DraftState) -> DraftState:
             lane_heroes = get_heroes_by_lane(role_needed, size=200)
             lane_names = [h["name"] for h in lane_heroes if h.get("name")]
             state["valid_lane_heroes"] = lane_names
-            lines.append(f"\nHeroes eligible for the '{role_needed}' lane:")
-            lines.append(", ".join(lane_names))
+            # Deliberately NOT appended into `lines`/live_stats_summary:
+            # eval evidence (src/eval/reliability_eval.py, 2026-09-13
+            # run) showed the model reliably ignoring/misreading this
+            # list when it was buried at the end of a long stats block
+            # alongside tier lists, counters, and compatibility data.
+            # generate_recommendation() instead gives it its own
+            # prominent section, right next to the instruction that
+            # references it, with each name quoted so multi-word names
+            # (e.g. "Popol and Kupa", which the model was observed
+            # splitting into two fictional heroes, "Popol" and "Kupa")
+            # read as one atomic token rather than ambiguous
+            # comma/"and"-separated text.
+            state["lane_roster_text"] = ", ".join(f'"{n}"' for n in lane_names)
         except Exception as e:
             lines.append(f"\n(Could not fetch lane roster for "
                           f"'{role_needed}': {e} — lane will not be enforced)")
             state["valid_lane_heroes"] = None
+            state["lane_roster_text"] = None
     else:
         state["valid_lane_heroes"] = None
+        state["lane_roster_text"] = None
 
     state["live_stats_summary"] = "\n".join(lines)
     return state
@@ -145,7 +161,7 @@ Live stats context:
 
 Strategic notes (curated by the user — weigh these heavily, they reflect deliberate strategic judgment):
 {retrieved_notes}
-
+{lane_constraint_section}
 Respond with ONLY valid JSON matching this exact schema, no other text, no markdown code fences:
 {{
   "recommendations": [
@@ -154,12 +170,30 @@ Respond with ONLY valid JSON matching this exact schema, no other text, no markd
   "summary": "<one or two sentence overall reasoning>"
 }}
 
-Provide 3 to 5 ranked recommendations, highest priority first. Do not recommend a hero that is already picked or banned. If a list of heroes eligible for the requested lane is given above, only recommend heroes from that list.
+Provide 3 to 5 ranked recommendations, highest priority first. Do not recommend a hero that is already picked or banned.
+"""
+
+LANE_CONSTRAINT_TEMPLATE = """
+ELIGIBLE HEROES FOR THE '{role_needed}' LANE — READ CAREFULLY:
+You MUST pick ONLY from this exact list. Each name below is one complete hero name — some contain the word "and" as part of the name itself (e.g. "Popol and Kupa" is ONE hero, not two); do not split, merge, or invent names.
+{lane_roster_text}
+Any recommendation for a hero not in this exact list is INVALID.
 """
 
 
 def generate_recommendation(state: DraftState) -> DraftState:
     llm = get_llm()
+
+    lane_roster_text = state.get("lane_roster_text")
+    lane_constraint_section = (
+        LANE_CONSTRAINT_TEMPLATE.format(
+            role_needed=state.get("role_needed"),
+            lane_roster_text=lane_roster_text,
+        )
+        if lane_roster_text
+        else ""
+    )
+
     prompt = RECOMMENDATION_PROMPT.format(
         ally_picks=", ".join(state.get("ally_picks", [])) or "none yet",
         enemy_picks=", ".join(state.get("enemy_picks", [])) or "none yet",
@@ -167,6 +201,7 @@ def generate_recommendation(state: DraftState) -> DraftState:
         role_needed=state.get("role_needed") or "any",
         live_stats_summary=state.get("live_stats_summary", ""),
         retrieved_notes=state.get("retrieved_notes", ""),
+        lane_constraint_section=lane_constraint_section,
     )
     response = llm.invoke(prompt)
     state["raw_llm_output"] = response.content
@@ -192,6 +227,13 @@ def parse_output(state: DraftState) -> DraftState:
     try:
         parsed = DraftRecommendation.model_validate_json(cleaned)
 
+        # Eval instrumentation only, below: record what the LLM raw
+        # output actually contained and which constraint each
+        # violating hero broke, BEFORE filtering removes them. This
+        # doesn't change behavior — the app never reads these fields —
+        # it just makes the deterministic filter's actual workload
+        # measurable (see src/eval/), instead of the violations
+        # silently vanishing with no record they ever happened.
         used_heroes = {
             h.lower() for h in (
                 state.get("ally_picks", [])
@@ -199,6 +241,21 @@ def parse_output(state: DraftState) -> DraftState:
                 + state.get("banned_heroes", [])
             )
         }
+        valid_lane_heroes = state.get("valid_lane_heroes")
+        valid_lane_lower = (
+            {h.lower() for h in valid_lane_heroes} if valid_lane_heroes else None
+        )
+        state["raw_recommended_heroes"] = [r.hero for r in parsed.recommendations]
+        state["constraint_violations"] = {
+            "used_hero_violations": [
+                r.hero for r in parsed.recommendations if r.hero.lower() in used_heroes
+            ],
+            "lane_violations": [
+                r.hero for r in parsed.recommendations
+                if valid_lane_lower is not None and r.hero.lower() not in valid_lane_lower
+            ],
+        }
+
         filtered_recs = [
             r for r in parsed.recommendations if r.hero.lower() not in used_heroes
         ]
@@ -207,11 +264,9 @@ def parse_output(state: DraftState) -> DraftState:
         # lane roster, drop any recommendation for a hero not on it.
         # Only enforce when we actually have the data — an API failure
         # shouldn't silently zero out all recommendations.
-        valid_lane_heroes = state.get("valid_lane_heroes")
         if valid_lane_heroes:
-            valid_lower = {h.lower() for h in valid_lane_heroes}
             filtered_recs = [
-                r for r in filtered_recs if r.hero.lower() in valid_lower
+                r for r in filtered_recs if r.hero.lower() in valid_lane_lower
             ]
 
         state["parsed_recommendation"] = {

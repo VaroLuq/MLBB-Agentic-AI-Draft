@@ -76,6 +76,52 @@ Or drop a `.md`/`.txt`/`.pdf`/`.docx` file directly into
 `python -m src.rag.ingest` (or click "Rebuild knowledge base" in the
 dashboard sidebar) to index new notes.
 
+## Evaluating the Draft Agent
+
+Since the Draft Agent's LLM output is non-deterministic, "does it
+work" needs to be measured across repeated runs, not spot-checked
+once. `src/eval/reliability_eval.py` measures three concrete things
+against a fixed set of golden draft scenarios (`src/eval/scenarios.py`):
+
+1. **JSON validity rate** — how often qwen2.5:3b produces valid
+   structured output on the first try vs. needing the self-repair
+   loop vs. failing even after retries.
+2. **Repair-loop rescue rate** — of the runs that failed on the first
+   try, how many did the repair loop actually save.
+3. **Raw constraint-violation rate** — how often the LLM recommends
+   an already-picked/banned or lane-ineligible hero *before* the
+   deterministic filters remove it, i.e. how much real work those
+   filters are doing.
+
+```bash
+python -m src.eval.reliability_eval                    # all scenarios, 2 repeats each
+python -m src.eval.reliability_eval --repeats 5         # more repeats, tighter estimate
+python -m src.eval.reliability_eval --scenario early_jungle
+```
+
+Each run is a real local LLM call, so this is slow (minutes, not
+seconds) — progress prints per-run.
+
+`src/eval/retrieval_eval.py` separately evaluates RAG retrieval
+quality — independent of LLM generation, since a bad recommendation
+could be the LLM's fault or the retriever's fault, and this tells you
+which. It queries the vector store directly against a hand-labeled
+set of query → expected-note pairs (`src/eval/retrieval_golden_set.py`),
+measuring hit@k and Mean Reciprocal Rank. No LLM calls, so it's fast
+(seconds):
+
+```bash
+python -m src.rag.ingest              # make sure the vector store is current first
+python -m src.eval.retrieval_eval
+```
+
+Both evals save results to `data/eval_results/` (one JSON file per
+run) and append to a shared `data/eval_results/eval_log.txt` for
+tracking over time. Together they measure reliability and
+retrieval correctness, not recommendation *quality* (i.e. whether the
+picks are actually good) — that's a harder, more subjective eval and
+a likely next step.
+
 ## Desktop launcher (Windows)
 
 `run_dashboard.bat` starts the dashboard with one double-click — no

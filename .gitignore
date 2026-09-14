@@ -17,4 +17,7 @@ data/raw/*
 data/snapshots/*
 !data/snapshots/.gitkeep
 
+data/eval_results/*
+!data/eval_results/.gitkeep
+
 .DS_Store
