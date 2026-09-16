@@ -40,6 +40,7 @@ class DraftState(TypedDict, total=False):
     retrieved_notes: str
     valid_lane_heroes: list[str] | None
     lane_roster_text: str | None
+    lane_filtered_stats_text: str | None
     raw_llm_output: str
     parsed_recommendation: dict | None
     parse_error: str | None
@@ -65,41 +66,27 @@ def gather_live_stats(state: DraftState) -> DraftState:
     except Exception as e:
         lines.append(f"(Could not fetch tier list: {e})")
 
-    for enemy in state.get("enemy_picks", []):
-        try:
-            counters = get_hero_counters(enemy, size=5)
-            lines.append(f"\nStrong counters to enemy hero {enemy}:")
-            for c in counters[:5]:
-                lines.append(
-                    f"- {c['name']} (win_rate={c['win_rate']:.3f}, "
-                    f"increase_win_rate={c['increase_win_rate']:.3f})"
-                )
-        except Exception as e:
-            lines.append(f"\n(Could not fetch counters for {enemy}: {e})")
-
-    for ally in state.get("ally_picks", []):
-        try:
-            compat = get_hero_compatibility(ally, size=5)
-            lines.append(f"\nGood teammates for ally hero {ally}:")
-            for c in compat[:5]:
-                lines.append(
-                    f"- {c['name']} (win_rate={c['win_rate']:.3f}, "
-                    f"increase_win_rate={c['increase_win_rate']:.3f})"
-                )
-        except Exception as e:
-            lines.append(f"\n(Could not fetch compatibility for {ally}: {e})")
-
-    # Lane filtering: fetch the valid hero roster for the requested lane
-    # (if it's a recognized lane) so the LLM sees only eligible options
-    # and so we can enforce the constraint deterministically afterward,
-    # rather than relying on the LLM to correctly apply lane knowledge
-    # (which is what caused the Minsitthar-in-jungle recommendation).
+    # Lane roster is fetched BEFORE the counters/compatibility calls
+    # below (moved up from its old position at the end of this
+    # function) specifically so it's available to cross-reference
+    # against them in code. Eval evidence (a manually-traced Aamon/exp
+    # scenario) showed the LLM ignoring real, relevant counter data
+    # (Gloo, Silvanna — both valid exp-lane counters to Aamon) in favor
+    # of its own general knowledge, because nothing told it those two
+    # separately-formatted lists (counters vs. eligible roster)
+    # overlapped — cross-referencing two lists itself is a nontrivial
+    # reasoning step for a 3B model with no prompted incentive to do
+    # it. Doing that cross-reference here, deterministically, and
+    # handing it a pre-filtered answer follows the same
+    # don't-trust-the-small-model-to-self-police-it philosophy as the
+    # existing used-hero/lane filters, just applied a step earlier.
     role_needed = (state.get("role_needed") or "").lower()
+    valid_lane_heroes = None
     if role_needed in VALID_LANES:
         try:
             lane_heroes = get_heroes_by_lane(role_needed, size=200)
-            lane_names = [h["name"] for h in lane_heroes if h.get("name")]
-            state["valid_lane_heroes"] = lane_names
+            valid_lane_heroes = [h["name"] for h in lane_heroes if h.get("name")]
+            state["valid_lane_heroes"] = valid_lane_heroes
             # Deliberately NOT appended into `lines`/live_stats_summary:
             # eval evidence (src/eval/reliability_eval.py, 2026-09-13
             # run) showed the model reliably ignoring/misreading this
@@ -112,7 +99,7 @@ def gather_live_stats(state: DraftState) -> DraftState:
             # splitting into two fictional heroes, "Popol" and "Kupa")
             # read as one atomic token rather than ambiguous
             # comma/"and"-separated text.
-            state["lane_roster_text"] = ", ".join(f'"{n}"' for n in lane_names)
+            state["lane_roster_text"] = ", ".join(f'"{n}"' for n in valid_lane_heroes)
         except Exception as e:
             lines.append(f"\n(Could not fetch lane roster for "
                           f"'{role_needed}': {e} — lane will not be enforced)")
@@ -121,6 +108,59 @@ def gather_live_stats(state: DraftState) -> DraftState:
     else:
         state["valid_lane_heroes"] = None
         state["lane_roster_text"] = None
+
+    valid_lane_lower = {h.lower() for h in valid_lane_heroes} if valid_lane_heroes else None
+    lane_filtered_sections = []
+
+    for enemy in state.get("enemy_picks", []):
+        try:
+            counters = get_hero_counters(enemy, size=5)
+            lines.append(f"\nStrong counters to enemy hero {enemy}:")
+            for c in counters[:5]:
+                lines.append(
+                    f"- {c['name']} (win_rate={c['win_rate']:.3f}, "
+                    f"increase_win_rate={c['increase_win_rate']:.3f})"
+                )
+
+            if valid_lane_lower is not None:
+                matches = [c["name"] for c in counters if c["name"].lower() in valid_lane_lower]
+                if matches:
+                    names = ", ".join(f'"{n}"' for n in matches)
+                    lane_filtered_sections.append(f"- Counters to {enemy}: {names}")
+                else:
+                    lane_filtered_sections.append(
+                        f"- Counters to {enemy}: none of the live counter data "
+                        f"overlaps with the '{role_needed}' lane roster"
+                    )
+        except Exception as e:
+            lines.append(f"\n(Could not fetch counters for {enemy}: {e})")
+
+    for ally in state.get("ally_picks", []):
+        try:
+            compat = get_hero_compatibility(ally, size=5)
+            lines.append(f"\nGood teammates for ally hero {ally}:")
+            for c in compat[:5]:
+                lines.append(
+                    f"- {c['name']} (win_rate={c['win_rate']:.3f}, "
+                    f"increase_win_rate={c['increase_win_rate']:.3f})"
+                )
+
+            if valid_lane_lower is not None:
+                matches = [c["name"] for c in compat if c["name"].lower() in valid_lane_lower]
+                if matches:
+                    names = ", ".join(f'"{n}"' for n in matches)
+                    lane_filtered_sections.append(f"- Synergy with {ally}: {names}")
+                else:
+                    lane_filtered_sections.append(
+                        f"- Synergy with {ally}: none of the live compatibility "
+                        f"data overlaps with the '{role_needed}' lane roster"
+                    )
+        except Exception as e:
+            lines.append(f"\n(Could not fetch compatibility for {ally}: {e})")
+
+    state["lane_filtered_stats_text"] = (
+        "\n".join(lane_filtered_sections) if lane_filtered_sections else None
+    )
 
     state["live_stats_summary"] = "\n".join(lines)
     return state
@@ -161,6 +201,7 @@ Live stats context:
 
 Strategic notes (curated by the user — weigh these heavily, they reflect deliberate strategic judgment):
 {retrieved_notes}
+{lane_filtered_stats_section}
 {lane_constraint_section}
 Respond with ONLY valid JSON matching this exact schema, no other text, no markdown code fences:
 {{
@@ -171,6 +212,12 @@ Respond with ONLY valid JSON matching this exact schema, no other text, no markd
 }}
 
 Provide 3 to 5 ranked recommendations, highest priority first. Do not recommend a hero that is already picked or banned.
+"""
+
+LANE_FILTERED_STATS_TEMPLATE = """
+HIGH-SIGNAL LIVE DATA FOR THE '{role_needed}' LANE:
+These heroes are BOTH statistically relevant (from the live counter/compatibility data above) AND valid picks for the '{role_needed}' lane. Strongly prefer recommending from here over general knowledge, unless the strategic notes above give good reason not to:
+{lane_filtered_stats_text}
 """
 
 LANE_CONSTRAINT_TEMPLATE = """
@@ -194,6 +241,16 @@ def generate_recommendation(state: DraftState) -> DraftState:
         else ""
     )
 
+    lane_filtered_stats_text = state.get("lane_filtered_stats_text")
+    lane_filtered_stats_section = (
+        LANE_FILTERED_STATS_TEMPLATE.format(
+            role_needed=state.get("role_needed"),
+            lane_filtered_stats_text=lane_filtered_stats_text,
+        )
+        if lane_filtered_stats_text
+        else ""
+    )
+
     prompt = RECOMMENDATION_PROMPT.format(
         ally_picks=", ".join(state.get("ally_picks", [])) or "none yet",
         enemy_picks=", ".join(state.get("enemy_picks", [])) or "none yet",
@@ -201,6 +258,7 @@ def generate_recommendation(state: DraftState) -> DraftState:
         role_needed=state.get("role_needed") or "any",
         live_stats_summary=state.get("live_stats_summary", ""),
         retrieved_notes=state.get("retrieved_notes", ""),
+        lane_filtered_stats_section=lane_filtered_stats_section,
         lane_constraint_section=lane_constraint_section,
     )
     response = llm.invoke(prompt)

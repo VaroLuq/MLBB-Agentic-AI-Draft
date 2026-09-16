@@ -146,6 +146,45 @@ def run_snapshot_and_report() -> str:
     return full_report
 
 
+# How stale the most recent snapshot needs to be before a startup
+# catch-up run triggers. The n8n schedule fires daily, so this is
+# deliberately a bit under 24h: if the wrapper was off across a
+# scheduled run, the gap since the last real snapshot will be well
+# past 24h by the time it's restarted, but this also tolerates the
+# wrapper being restarted a few hours early/late around its own
+# normal daily run without spuriously double-firing.
+CATCH_UP_STALE_THRESHOLD_HOURS = 20.0
+
+
+def catch_up_if_stale(threshold_hours: float = CATCH_UP_STALE_THRESHOLD_HOURS) -> str | None:
+    """
+    Meant to be called once, at wrapper startup (see
+    meta_watcher_server.py). n8n's HTTP Request node can only trigger
+    a run while the wrapper happens to be listening — if it was off
+    when the 06:00 schedule fired, that snapshot is just gone, silently
+    (n8n shows a failed execution, but nothing on the Python/data side
+    ever ran to record it). This closes that gap from the other end:
+    whenever the wrapper DOES start, it checks whether the most recent
+    snapshot is older than `threshold_hours` (or there are no
+    snapshots at all) and, if so, immediately takes one — so restarting
+    the wrapper after a missed window self-heals instead of silently
+    waiting for the next scheduled trigger. Returns the report string
+    if a catch-up run happened, None if the most recent snapshot was
+    already recent enough.
+    """
+    snapshots = list_snapshots()
+    if snapshots:
+        latest = load_snapshot(snapshots[-1])
+        taken_at_str = latest.get("taken_at")
+        if taken_at_str:
+            taken_at = datetime.fromisoformat(taken_at_str)
+            age_hours = (datetime.now(timezone.utc) - taken_at).total_seconds() / 3600
+            if age_hours < threshold_hours:
+                return None  # recent enough, nothing missed
+
+    return run_snapshot_and_report()
+
+
 if __name__ == "__main__":
     try:
         print(run_snapshot_and_report())

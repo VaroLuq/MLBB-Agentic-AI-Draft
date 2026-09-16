@@ -27,6 +27,18 @@ self-repair loop). See README.md for full phase-by-phase status.
 - **Draft Agent** (`src/agents/draft_agent.py`) — a LangGraph state
   machine: gather_live_stats -> retrieve_notes -> generate_recommendation
   -> parse_output <-> repair_output (loop, max 2 retries) -> end.
+  `gather_live_stats` does more than fetch data: it deterministically
+  cross-references `get_hero_counters()`/`get_hero_compatibility()`
+  results against the fetched lane roster (`lane_filtered_stats_text`)
+  before the prompt is built — this exists because the LLM was found
+  (via manual trace, then confirmed via repeat runs) to ignore real,
+  relevant counter data it technically had in-context, since nothing
+  told it to cross-reference two separately-formatted lists itself.
+  Both `lane_filtered_stats_text` and `lane_roster_text` are
+  deliberately given prominent, emphatically-worded sections late in
+  the prompt (not buried in the general stats block) — see the
+  empirical findings below for why position/framing, not just
+  presence, turned out to matter.
 - **Dashboard** (`src/ui/app.py`) — Streamlit, calls the agent directly.
 - **Eval harness** (`src/eval/`, Phase 7) — two independent pieces so
   far, deliberately separated because a bad recommendation could be
@@ -173,6 +185,37 @@ self-repair loop). See README.md for full phase-by-phase status.
   -> root-cause -> fix -> re-eval actually working as a loop; if
   continuing this work, look at whether Khaleed-specific confusion
   recurs before concluding it's fully resolved.
+- FOUND + FIXED (2026-09-14, via manual trace, not the eval suite this
+  time): asked to walk through a concrete scenario (enemy picks
+  Aamon, role_needed="exp", no bans) step by step, found the LLM's
+  picks (Khaleed/Julian/Gatotkaca) were NOT grounded in the live
+  `get_hero_counters("Aamon")` data at all, despite that data
+  containing two real, valid exp-lane counters (Gloo, Silvanna). Root
+  cause, same family as the lane-hallucination bug: the counters list
+  and the eligible-lane list are two separately-formatted blocks with
+  no instruction telling the model to cross-reference them — that's a
+  nontrivial reasoning step for a 3B model with no prompted incentive
+  to attempt it. The counters section also has zero imperative
+  framing (just a passive label) compared to the lane list's "You
+  MUST"/"INVALID" language, and sits earlier in the prompt (recency
+  effects favor what's near the end). Fix in `gather_live_stats()`:
+  the lane roster fetch now happens BEFORE the counters/compatibility
+  calls, so both can be cross-referenced in code; the intersection
+  gets its own emphatically-worded `LANE_FILTERED_STATS_TEMPLATE`
+  section ("Strongly prefer recommending from here"), placed late in
+  the prompt next to the lane constraint section. Same
+  don't-trust-the-small-model-to-self-police-it philosophy as the
+  existing deterministic filters, just applied one step earlier (as
+  prompt curation, not post-hoc filtering). Verified: 5/5 repeat runs
+  on the same Aamon/exp scenario now put Gloo AND Silvanna in the top
+  2 picks (was 0/1 before) with rationale explicitly citing "strong
+  counter to Aamon." Re-ran the full reliability eval as a regression
+  check: 0% raw constraint violations (0/36, down from the already-
+  fixed 2.8%/1-in-36 — even the residual Khaleed mis-pick is gone),
+  100% first-try JSON validity maintained, no latency regression. This
+  also extends symmetrically to ally compatibility data
+  ("Synergy with X" lines) even though the triggering case was
+  enemy counters — same structural bug, same fix, applied once.
 - Retrieval eval (2026-09-13, `retrieval_eval.py`, 7 golden queries):
   100% hit@4, MRR 1.0 — every real note in `data/raw/` reachable at
   rank 1 by a realistic query, after fixing a bug IN THE EVAL ITSELF
