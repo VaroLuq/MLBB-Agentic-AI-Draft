@@ -88,8 +88,7 @@ def detect_drift(lookback: int = 1, thresholds: dict[str, float] = DRIFT_THRESHO
         return {
             "error": f"Need at least {lookback + 1} snapshots to compare "
                      f"with lookback={lookback}, only have {len(snapshots)}. "
-                     f"Run take_snapshot() again later (Phase 6 will "
-                     f"automate this on a schedule).",
+                     f"Run take_snapshot() again later ",
             "drift": [],
         }
 

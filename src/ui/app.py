@@ -205,7 +205,7 @@ def main():
 
         st.header("Meta-Watcher")
         st.caption("Local HTTP wrapper used by the n8n scheduling workflow "
-                   "(Phase 6) to trigger snapshot + drift checks.")
+                   "to trigger snapshot + drift checks.")
         watcher_running = is_meta_watcher_running()
         if watcher_running:
             st.caption(f"Status: \U0001F7E2 Running on port {META_WATCHER_PORT}")

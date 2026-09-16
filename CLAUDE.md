@@ -246,10 +246,20 @@ self-repair loop). See README.md for full phase-by-phase status.
   serving. Verified both branches directly: restarted the wrapper
   with a ~2-day-old snapshot present -> caught up immediately;
   restarted again right after -> correctly skipped ("recent enough").
-  Still doesn't auto-start on boot/login (that request was
-  specifically declined earlier in favor of staying manual) — this
-  only closes the "silently lost a scheduled run" gap, not the
-  "remember to start it at all" gap.
+  Still doesn't auto-start on boot/login — auto-start was offered
+  TWICE (once before this fix, once after, when the user clarified
+  their actual pattern: n8n/Docker stays on essentially always, the
+  wrapper is the thing that's usually off, not just occasionally
+  restarted) and declined both times in favor of staying manual. This
+  is a deliberate, informed tradeoff, not an oversight: given that
+  usage pattern, catch-up-on-start does NOT give daily snapshot
+  granularity — it only captures "state at the moment I happened to
+  start the wrapper," collapsing however many missed 06:00 triggers
+  happened in between into a single point-in-time snapshot (and
+  there's no way to backfill the missed days after the fact; the API
+  only reflects current stats, not history). Don't re-litigate this
+  as an unresolved gap or push auto-start again without new evidence
+  the user's priorities changed.
 - On this dev machine, outbound HTTPS calls (Rone Arena API, PyPI)
   intermittently/reliably failed with `SSLCertVerificationError:
   unable to get local issuer certificate`. Root cause: Norton
