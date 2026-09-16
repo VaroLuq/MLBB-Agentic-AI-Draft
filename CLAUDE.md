@@ -227,6 +227,29 @@ self-repair loop). See README.md for full phase-by-phase status.
   content and the expected keyword. Worth remembering for similar
   content checks elsewhere: source markdown line-wrapping is a real,
   recurring gotcha, not a one-off.
+- ADDED (2026-09-16): `meta_watcher.catch_up_if_stale()` +
+  `CATCH_UP_STALE_THRESHOLD_HOURS` (20h default, overridable via
+  `META_WATCHER_CATCHUP_THRESHOLD_HOURS` env var). Motivated by a
+  user question ("if the wrapper's off, does n8n's fetched data get
+  saved anywhere?") that surfaced a real misconception worth
+  recording: n8n's Docker container NEVER holds the fetched stats
+  data at all, even transiently — it only sends an HTTP POST and
+  gets connection-refused if the wrapper's down, since all the
+  actual API-fetching and file-writing happens inside the Python
+  wrapper process on the host, not in Docker. So "buffer it in the
+  container" isn't a coherent fix without duplicating
+  rone_arena_client.py's/meta_watcher.py's logic into an n8n
+  workflow — a real ongoing-drift risk, rejected in favor of making
+  the wrapper self-heal instead. `meta_watcher_server.py` now checks
+  the latest snapshot's age at startup and immediately runs a
+  catch-up snapshot if it's stale, before the Flask server starts
+  serving. Verified both branches directly: restarted the wrapper
+  with a ~2-day-old snapshot present -> caught up immediately;
+  restarted again right after -> correctly skipped ("recent enough").
+  Still doesn't auto-start on boot/login (that request was
+  specifically declined earlier in favor of staying manual) — this
+  only closes the "silently lost a scheduled run" gap, not the
+  "remember to start it at all" gap.
 - On this dev machine, outbound HTTPS calls (Rone Arena API, PyPI)
   intermittently/reliably failed with `SSLCertVerificationError:
   unable to get local issuer certificate`. Root cause: Norton
@@ -285,7 +308,12 @@ this file's writing:
   confirmed), and the Meta-Watcher HTTP wrapper
   (`src/agents/meta_watcher_server.py`) doesn't survive a machine
   restart/session end — no auto-start configured, must be manually
-  restarted whenever the schedule needs to fire.
+  restarted whenever the schedule needs to fire. Partially
+  mitigated 2026-09-16: it now self-heals on startup instead of
+  silently missing whatever ran while it was off — see the empirical
+  findings entry below (`catch_up_if_stale`). Still no auto-start, so
+  a missed window only gets backfilled once you actually restart it,
+  not the moment it's missed.
 - Phase 7 (eval harness) IN PROGRESS, being built collaboratively
   with the user (who explicitly asked to be guided through eval
   methodology, not just handed a finished harness — keep that

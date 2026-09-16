@@ -159,6 +159,16 @@ Schedule Trigger → HTTP Request node posting to
 `http://host.docker.internal:8765/run`. Activate the workflow (toggle,
 top-right of the editor) for the daily schedule to run unattended.
 
+If the wrapper happens to be off when the schedule fires, that run is
+just lost — n8n's Docker container never holds the fetched data
+itself (all the API-calling and file-writing happens inside the
+wrapper on the host, not in Docker), so there's nothing to replay
+later. To avoid silently missing snapshots, the wrapper self-heals
+instead: every time it starts, it checks whether the most recent
+snapshot is more than 20 hours old and immediately takes a catch-up
+one if so — so restarting it after any downtime backfills the gap
+rather than waiting for tomorrow's trigger.
+
 ## Troubleshooting
 
 **`SSLCertVerificationError` on any HTTPS call (API requests or
