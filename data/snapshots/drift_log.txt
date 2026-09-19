@@ -243,3 +243,7 @@ Meta drift from 2026-09-16T14:05:51.199888+00:00 to 2026-09-19T10:37:28.859652+0
   [DOWN] Floryn ban_rate: 0.171 -> 0.145 (-0.027)
   [DOWN] Masha win_rate: 0.560 -> 0.537 (-0.023)
   [DOWN] Barats ban_rate: 0.095 -> 0.075 (-0.020)
+
+--- 2026-09-19T10:47:36.068983+00:00 ---
+Snapshot saved to: data/snapshots/20260919_104736.json
+No significant drift between 2026-09-19T10:37:28.859652+00:00 and 2026-09-19T10:47:36.068074+00:00.
