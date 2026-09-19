@@ -14,8 +14,11 @@ vectorstore/*
 data/raw/*
 !data/raw/.gitkeep
 
-data/snapshots/*
-!data/snapshots/.gitkeep
+# data/snapshots/ is DELIBERATELY tracked (not ignored), unlike the
+# other data/ subfolders — the GitHub Actions workflow
+# (.github/workflows/meta-watcher.yml) commits snapshots and
+# drift_log.txt back into the repo on every scheduled run. Git IS the
+# database for Meta-Watcher's history; see that workflow's comments.
 
 data/eval_results/*
 !data/eval_results/.gitkeep

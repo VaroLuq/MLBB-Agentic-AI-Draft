@@ -1,0 +1,56 @@
+name: Meta-Watcher Scheduled Snapshot
+
+# Replaces the local n8n-in-Docker + Flask wrapper setup for
+# unattended scheduling: that approach required your own machine to
+# be powered on at the scheduled time (see project history/CLAUDE.md
+# for the full "does the wrapper need to be running" discussion).
+# This workflow needs nothing local at all — GitHub's own runners
+# call the Rone Arena API and commit the results back into this repo,
+# which acts as the durable store (no database, no hosting, $0 cost).
+#
+# The local n8n workflow (n8n/meta_watcher_schedule.json) and the
+# Flask wrapper (src/agents/meta_watcher_server.py) still work fine
+# standalone if you want a manual/local trigger — this doesn't remove
+# them, it just means they're no longer required for daily coverage.
+
+on:
+  schedule:
+    # Daily at 06:00 UTC. GitHub's cron scheduling is best-effort and
+    # can slip by several minutes (more under load) — fine for a
+    # once-daily trend snapshot, not something needing exact timing.
+    # Convert your preferred local time to UTC if you change this.
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}  # lets you trigger a run manually from the Actions tab anytime
+
+permissions:
+  contents: write  # required to commit the new snapshot back to the repo
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements-meta-watcher.txt
+
+      - name: Run Meta-Watcher
+        run: python -m src.agents.meta_watcher
+
+      - name: Commit and push snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/snapshots/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Meta-Watcher: automated snapshot $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push

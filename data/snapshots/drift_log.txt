@@ -1,0 +1,245 @@
+
+--- 2026-09-12T10:01:40.109458+00:00 ---
+FAILED: Failed to fetch hero rank stats: Request failed: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 464, in _make_request
+    self._validate_conn(conn)
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 1106, in _validate_conn
+    conn.connect()
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connection.py", line 796, in connect
+    sock_and_verified = _ssl_wrap_socket_and_match_hostname(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connection.py", line 975, in _ssl_wrap_socket_and_match_hostname
+    ssl_sock = ssl_wrap_socket(
+               ^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\util\ssl_.py", line 433, in ssl_wrap_socket
+    ssl_sock = _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\util\ssl_.py", line 477, in _ssl_wrap_socket_impl
+    return ssl_context.wrap_socket(sock, server_hostname=server_hostname)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python311\Lib\ssl.py", line 517, in wrap_socket
+    return self.sslsocket_class._create(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python311\Lib\ssl.py", line 1075, in _create
+    self.do_handshake()
+  File "C:\Python311\Lib\ssl.py", line 1346, in do_handshake
+    self._sslobj.do_handshake()
+ssl.SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 788, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 488, in _make_request
+    raise new_e
+urllib3.exceptions.SSLError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\venv\Lib\site-packages\requests\adapters.py", line 696, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 842, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\util\retry.py", line 543, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\venv\Lib\site-packages\rone_arena\client.py", line 90, in request
+    response = self.session.request(
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\requests\sessions.py", line 651, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\requests\sessions.py", line 784, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\requests\adapters.py", line 727, in send
+    raise SSLError(e, request=request)
+requests.exceptions.SSLError: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\src\api_client\rone_arena_client.py", line 85, in get_hero_rank_stats
+    response = client.heroes.heroes_rank(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\rone_arena\client.py", line 207, in heroes_rank
+    return self._transport.request("GET", "/heroes/rank", params=params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\rone_arena\client.py", line 99, in request
+    raise RoneArenaError(f"Request failed: {exc}") from exc
+rone_arena.client.RoneArenaError: Request failed: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\src\agents\meta_watcher.py", line 202, in <module>
+    print(run_snapshot_and_report())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\src\agents\meta_watcher.py", line 191, in run_snapshot_and_report
+    snapshot_path = take_snapshot()
+                    ^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\src\agents\meta_watcher.py", line 45, in take_snapshot
+    stats = get_hero_rank_stats(days=days, size=size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\src\api_client\rone_arena_client.py", line 90, in get_hero_rank_stats
+    raise RuntimeError(f"Failed to fetch hero rank stats: {e}") from e
+RuntimeError: Failed to fetch hero rank stats: Request failed: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+
+
+--- 2026-09-12T10:04:23.047405+00:00 ---
+FAILED: Failed to fetch hero rank stats: Request failed: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 464, in _make_request
+    self._validate_conn(conn)
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 1106, in _validate_conn
+    conn.connect()
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connection.py", line 796, in connect
+    sock_and_verified = _ssl_wrap_socket_and_match_hostname(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connection.py", line 975, in _ssl_wrap_socket_and_match_hostname
+    ssl_sock = ssl_wrap_socket(
+               ^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\util\ssl_.py", line 433, in ssl_wrap_socket
+    ssl_sock = _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\util\ssl_.py", line 477, in _ssl_wrap_socket_impl
+    return ssl_context.wrap_socket(sock, server_hostname=server_hostname)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python311\Lib\ssl.py", line 517, in wrap_socket
+    return self.sslsocket_class._create(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python311\Lib\ssl.py", line 1075, in _create
+    self.do_handshake()
+  File "C:\Python311\Lib\ssl.py", line 1346, in do_handshake
+    self._sslobj.do_handshake()
+ssl.SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 788, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 488, in _make_request
+    raise new_e
+urllib3.exceptions.SSLError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\venv\Lib\site-packages\requests\adapters.py", line 696, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\connectionpool.py", line 842, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\urllib3\util\retry.py", line 543, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\venv\Lib\site-packages\rone_arena\client.py", line 90, in request
+    response = self.session.request(
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\requests\sessions.py", line 651, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\requests\sessions.py", line 784, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\requests\adapters.py", line 727, in send
+    raise SSLError(e, request=request)
+requests.exceptions.SSLError: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\src\api_client\rone_arena_client.py", line 85, in get_hero_rank_stats
+    response = client.heroes.heroes_rank(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\rone_arena\client.py", line 207, in heroes_rank
+    return self._transport.request("GET", "/heroes/rank", params=params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\venv\Lib\site-packages\rone_arena\client.py", line 99, in request
+    raise RoneArenaError(f"Request failed: {exc}") from exc
+rone_arena.client.RoneArenaError: Request failed: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\MLBB-Draft\src\agents\meta_watcher.py", line 202, in <module>
+    print(run_snapshot_and_report())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\src\agents\meta_watcher.py", line 191, in run_snapshot_and_report
+    snapshot_path = take_snapshot()
+                    ^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\src\agents\meta_watcher.py", line 45, in take_snapshot
+    stats = get_hero_rank_stats(days=days, size=size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\MLBB-Draft\src\api_client\rone_arena_client.py", line 90, in get_hero_rank_stats
+    raise RuntimeError(f"Failed to fetch hero rank stats: {e}") from e
+RuntimeError: Failed to fetch hero rank stats: Request failed: HTTPSConnectionPool(host='arena.rone.dev', port=443): Max retries exceeded with url: /api/heroes/rank?days=7&rank=all&sort_field=win_rate&sort_order=desc&size=50&index=1 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:992)')))
+
+
+--- 2026-09-12T10:05:54.802653+00:00 ---
+Snapshot saved to: data\snapshots\20260912_100554.json
+No significant drift between 2026-09-12T09:17:23.995634+00:00 and 2026-09-12T10:05:54.796754+00:00.
+
+--- 2026-09-12T10:43:20.371669+00:00 ---
+Snapshot saved to: data\snapshots\20260912_104320.json
+No significant drift between 2026-09-12T10:05:54.796754+00:00 and 2026-09-12T10:43:20.366160+00:00.
+
+--- 2026-09-12T10:48:13.194458+00:00 ---
+Snapshot saved to: data\snapshots\20260912_104813.json
+No significant drift between 2026-09-12T10:43:20.366160+00:00 and 2026-09-12T10:48:13.192500+00:00.
+
+--- 2026-09-12T13:04:17.903739+00:00 ---
+Snapshot saved to: data\snapshots\20260912_130417.json
+No significant drift between 2026-09-12T10:48:13.192500+00:00 and 2026-09-12T13:04:17.899688+00:00.
+
+--- 2026-09-14T14:23:05.694238+00:00 ---
+Snapshot saved to: data\snapshots\20260914_142305.json
+Meta drift from 2026-09-12T13:04:17.899688+00:00 to 2026-09-14T14:23:05.691000+00:00:
+  [UP] Melissa ban_rate: 0.227 -> 0.251 (+0.024)
+
+--- 2026-09-16T13:58:17.600439+00:00 ---
+Snapshot saved to: data\snapshots\20260916_135817.json
+No significant drift between 2026-09-14T14:23:05.691000+00:00 and 2026-09-16T13:58:17.598914+00:00.
+
+--- 2026-09-16T14:05:51.201844+00:00 ---
+Snapshot saved to: data\snapshots\20260916_140551.json
+No significant drift between 2026-09-16T13:58:17.598914+00:00 and 2026-09-16T14:05:51.199888+00:00.
+
+--- 2026-09-19T10:37:28.862995+00:00 ---
+Snapshot saved to: data\snapshots\20260919_103728.json
+Meta drift from 2026-09-16T14:05:51.199888+00:00 to 2026-09-19T10:37:28.859652+00:00:
+  [DOWN] Gloo ban_rate: 0.484 -> 0.419 (-0.064)
+  [DOWN] Belerick ban_rate: 0.617 -> 0.554 (-0.064)
+  [DOWN] Melissa ban_rate: 0.264 -> 0.207 (-0.058)
+  [DOWN] Eudora ban_rate: 0.627 -> 0.577 (-0.050)
+  [DOWN] Marcel ban_rate: 0.376 -> 0.328 (-0.049)
+  [DOWN] Sun ban_rate: 0.318 -> 0.275 (-0.043)
+  [DOWN] Atlas ban_rate: 0.205 -> 0.167 (-0.038)
+  [DOWN] Miya ban_rate: 0.228 -> 0.192 (-0.036)
+  [UP] Masha ban_rate: 0.003 -> 0.036 (+0.033)
+  [DOWN] Paquito ban_rate: 0.530 -> 0.497 (-0.033)
+  [DOWN] Estes ban_rate: 0.384 -> 0.351 (-0.033)
+  [DOWN] Hirara ban_rate: 0.635 -> 0.604 (-0.030)
+  [DOWN] Rafaela ban_rate: 0.164 -> 0.137 (-0.027)
+  [DOWN] Floryn ban_rate: 0.171 -> 0.145 (-0.027)
+  [DOWN] Masha win_rate: 0.560 -> 0.537 (-0.023)
+  [DOWN] Barats ban_rate: 0.095 -> 0.075 (-0.020)

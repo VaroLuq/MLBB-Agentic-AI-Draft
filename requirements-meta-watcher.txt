@@ -1,0 +1,10 @@
+# Minimal dependency set for running the Meta-Watcher standalone
+# (src/agents/meta_watcher.py), used by the GitHub Actions workflow
+# (.github/workflows/meta-watcher.yml). Deliberately NOT the full
+# requirements.txt: Meta-Watcher doesn't touch Ollama/LangChain/
+# Chroma at all (those are only needed by the Draft Agent/dashboard),
+# so installing them here would just slow down every scheduled run
+# for no benefit. Keep versions in sync with requirements.txt.
+
+rone-arena==1.0.0
+python-dotenv==1.0.1
