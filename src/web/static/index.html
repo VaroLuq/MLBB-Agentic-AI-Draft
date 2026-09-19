@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a1017">
+  <title>Draft · Draft Copilot</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' fill='none'%3E%3Cpath d='M16 2.5 28 9.25v13.5L16 29.5 4 22.75V9.25z' stroke='%23e8c547' stroke-width='2.4'/%3E%3Cpath d='m11 16.5 3.5 3.5 7-8' stroke='%23e8c547' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preload" href="fonts/barlow-500.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/draft" aria-label="Draft Copilot">
+        <svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M16 2.5 28 9.25v13.5L16 29.5 4 22.75V9.25z" stroke="currentColor" stroke-width="2.2"/>
+          <path d="m11 16.5 3.5 3.5 7-8" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="brand-word">Draft Copilot</span>
+      </a>
+      <nav class="nav" aria-label="Views">
+        <a id="nav-draft" href="#/draft">Draft</a>
+        <a id="nav-notebook" href="#/notebook">Notebook</a>
+      </nav>
+      <div class="topbar-status">
+        <button id="chip-kb" class="status-chip" type="button" hidden title="Your notes have changed since the knowledge base was last built">
+          <span class="lamp" data-tone="warn" aria-hidden="true"></span>Rebuild needed
+        </button>
+        <span id="chip-llm" class="status-chip" role="status">
+          <span class="lamp" data-tone="idle" aria-hidden="true"></span><span id="llm-text">Checking model...</span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="app">
+
+    <!-- ================================================================ Draft -->
+    <section id="view-draft" aria-labelledby="h-draft">
+      <h1 id="h-draft" class="sr-only" tabindex="-1">Draft board</h1>
+
+      <div class="stage">
+        <section class="team team-ally panel bevel" aria-labelledby="h-ally">
+          <div class="team-head">
+            <h2 id="h-ally" class="panel-title">Ally</h2>
+            <span id="count-ally" class="team-count" aria-label="Allies picked">0/5</span>
+          </div>
+          <ol id="slots-ally" class="slots"></ol>
+        </section>
+
+        <section class="pool-panel panel bevel" aria-label="Bans, lane and hero pool">
+          <div>
+            <div class="pool-block-title">
+              <h2 id="h-bans" class="panel-title">Bans</h2>
+              <span id="count-ban" class="team-count" aria-label="Heroes banned">0/10</span>
+            </div>
+            <ol id="slots-ban" class="bans" aria-labelledby="h-bans"></ol>
+          </div>
+
+          <div>
+            <div id="lbl-assign" class="group-label">Add heroes to</div>
+            <div id="assign" role="radiogroup" aria-labelledby="lbl-assign"></div>
+          </div>
+
+          <div>
+            <div class="pool-block-title"><h2 id="h-pool" class="panel-title">Hero pool</h2></div>
+            <div class="search">
+              <span data-icon="search" aria-hidden="true"></span>
+              <input id="hero-search" class="field" type="search" placeholder="Search heroes" autocomplete="off" spellcheck="false" aria-label="Search heroes" aria-controls="pool-grid">
+            </div>
+            <p class="hint">Press <kbd>Enter</kbd> to add the first match. <kbd>/</kbd> jumps here from anywhere.</p>
+            <div id="pool-grid" class="pool-grid" style="margin-top:12px"></div>
+          </div>
+        </section>
+
+        <section class="team team-enemy panel bevel" aria-labelledby="h-enemy">
+          <div class="team-head">
+            <h2 id="h-enemy" class="panel-title">Enemy</h2>
+            <span id="count-enemy" class="team-count" aria-label="Enemies picked">0/5</span>
+          </div>
+          <ol id="slots-enemy" class="slots"></ol>
+        </section>
+      </div>
+
+      <div class="lockbar panel bevel">
+        <div class="lane-field">
+          <div id="lbl-lane" class="group-label">Lane needed</div>
+          <div id="lane" class="seg" role="radiogroup" aria-labelledby="lbl-lane"></div>
+        </div>
+        <div class="lockbar-actions">
+          <button id="btn-clear" class="btn btn-quiet bevel" type="button" hidden><span data-icon="undo"></span>Clear draft</button>
+          <button id="btn-recommend" class="btn btn-primary bevel" type="button"><span data-icon="lock"></span>Get recommendation</button>
+        </div>
+      </div>
+
+      <div class="lower">
+        <section id="results" class="results" aria-labelledby="h-results" aria-busy="false">
+          <h2 id="h-results" class="sr-only">Recommendation</h2>
+          <div id="results-body"></div>
+        </section>
+
+        <aside class="intel" aria-label="Live intel">
+          <section class="panel bevel" aria-labelledby="h-intel">
+            <div class="intel-head">
+              <h2 id="h-intel" class="panel-title">Live intel</h2>
+              <button id="intel-refresh" class="btn btn-quiet icon-btn bevel" type="button" aria-label="Refresh live intel" title="Refresh"><span data-icon="refresh"></span></button>
+            </div>
+            <p class="muted small" style="margin:6px 0 0">Highest win rates over the last 7 days.</p>
+            <ol id="intel-list" class="intel-list"></ol>
+          </section>
+
+          <section class="panel bevel" aria-labelledby="h-watch">
+            <h2 id="h-watch" class="panel-title">Meta-Watcher</h2>
+            <p class="muted small" style="margin:6px 0 0">Local snapshot service the n8n schedule calls to track meta drift.</p>
+            <div id="watcher"></div>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============================================================ Notebook -->
+    <section id="view-notebook" hidden aria-labelledby="h-notebook">
+      <div class="nb-head">
+        <h1 id="h-notebook" class="page-title" tabindex="-1">Strategy notebook</h1>
+        <button id="btn-new-note" class="btn btn-primary bevel" type="button"><span data-icon="plus"></span>New note</button>
+      </div>
+      <div id="kb-banner" hidden></div>
+      <div class="nb-body">
+        <section class="nb-list-panel panel bevel" aria-label="Notes">
+          <div id="nb-filters" class="nb-filters" role="group" aria-label="Filter notes"></div>
+          <ul id="note-list" class="note-list"></ul>
+        </section>
+        <article id="note-reader" class="reader panel bevel" aria-live="polite"></article>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="note-dialog" class="modal" aria-modal="true"></dialog>
+  <div id="toasts" class="toasts"></div>
+  <div id="sr-live" class="sr-only" aria-live="polite" role="status"></div>
+</body>
+</html>

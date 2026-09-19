@@ -38,15 +38,18 @@ pip install -r requirements.txt
 cp .env.example .env            # no API key needed, defaults work out of the box
 
 python -m src.rag.ingest        # index the sample strategy notes
-streamlit run src/ui/app.py
+python -m src.web.server --open # starts the app and opens http://localhost:8600
 ```
 
-Make sure Ollama is running before you open the dashboard. From the
-draft board you can select ally/enemy picks, bans, and the lane you
-need, then get a ranked recommendation with live stats and retrieved
-notes shown alongside it. The sidebar shows a live meta snapshot and
-lets you add/browse strategy notes and rebuild the knowledge base
-without leaving the browser.
+Make sure Ollama is running first (the header shows whether it's
+reachable). On the **Draft** view, add the heroes already picked and
+banned, choose the lane you need, and request a ranked
+recommendation. Each pick shows the live-data or note evidence
+behind it, or says plainly when it rests on model knowledge alone,
+and "What the agent saw" exposes the stats, retrieved notes and raw
+model output. The **Notebook** view is where you write, edit and
+delete strategy notes and rebuild the knowledge base. The app only
+listens on localhost.
 
 **Windows tip:** double-click `run_dashboard.bat` instead of using the
 terminal each time — see "Desktop launcher" below.
@@ -59,7 +62,7 @@ terminal each time — see "Desktop launcher" below.
 | `src/rag/` | Curated strategy notes → embeddings → Chroma vector store |
 | `src/agents/draft_agent.py` | LangGraph agent: gather stats → retrieve notes → generate → validate (self-repair loop on invalid JSON) |
 | `src/agents/meta_watcher.py` | Deterministic snapshot + drift-detection agent (no LLM needed) |
-| `src/ui/app.py` | Streamlit dashboard |
+| `src/web/` | The app: Flask JSON API (`server.py`) wrapping the agents/RAG unchanged, plus the static frontend in `static/` (HTML, Tailwind CSS, vanilla JS modules) |
 | `data/raw/` | Your strategy notes (general + per-hero) |
 | `data/snapshots/` | Meta-Watcher's historical snapshots + drift log |
 
@@ -73,8 +76,10 @@ python -m src.rag.add_note "Ban high-mobility assassins first in gold-heavy meta
 Or drop a `.md`/`.txt`/`.pdf`/`.docx` file directly into
 `data/raw/general/` (hero-agnostic) or `data/raw/heroes/<HeroName>/`
 (hero-specific — folder name is the tag). Then re-run
-`python -m src.rag.ingest` (or click "Rebuild knowledge base" in the
-dashboard sidebar) to index new notes.
+`python -m src.rag.ingest` (or use "Rebuild knowledge base" in the
+Notebook view) to index new notes. Notes can also be written, edited
+and deleted from the Notebook view itself; it tells you when the
+knowledge base has fallen out of step with them.
 
 ## Evaluating the Draft Agent
 
@@ -124,11 +129,33 @@ a likely next step.
 
 ## Desktop launcher (Windows)
 
-`run_dashboard.bat` starts the dashboard with one double-click — no
-terminal navigation needed. Right-click it → **Send to** → **Desktop
-(create shortcut)** for a normal desktop icon. A console window stays
-open behind the browser tab (closing it stops the app); Ollama still
-needs to be running separately.
+`run_dashboard.bat` starts the app with one double-click and opens it
+in your browser — no terminal navigation needed. Right-click it →
+**Send to** → **Desktop (create shortcut)** for a normal desktop
+icon. A console window stays open behind the browser (closing it
+stops the app), and launching it again while it's running just
+reopens the existing instance. Ollama still needs to be running
+separately. The port defaults to 8600; set `DRAFT_COPILOT_PORT` to
+change it.
+
+## Frontend styling
+
+The stylesheet `src/web/static/app.css` is built from
+`src/web/styles/input.css` with Tailwind's standalone CLI (no npm
+needed) and the built file is committed, so running the app never
+requires a build. To change styles, download
+`tailwindcss-windows-x64.exe` from the
+[Tailwind releases](https://github.com/tailwindlabs/tailwindcss/releases)
+into `tools/` (git-ignored) as `tailwindcss.exe`, then:
+
+```bash
+tools\tailwindcss.exe -i src/web/styles/input.css -o src/web/static/app.css --minify
+```
+
+Fonts (Barlow, Barlow Condensed) are self-hosted in
+`src/web/static/fonts/`; nothing loads from a CDN at runtime. Hero
+portraits are generated initials badges, since no hero art ships
+with the project.
 
 ## Meta-Watcher: standalone trend detection
 
@@ -136,10 +163,14 @@ needs to be running separately.
 python -m src.agents.meta_watcher
 ```
 
-Snapshots current hero stats to `data/snapshots/`, then diffs against
-the previous snapshot to flag heroes whose win/pick/ban rate moved by
-2+ percentage points. Every run — manual or scheduled — is logged to
-`data/snapshots/drift_log.txt`.
+The command snapshots current hero stats to `data/snapshots/`, then
+diffs against the previous snapshot to flag heroes whose win/pick/ban
+rate moved by 2+ percentage points. Every run, manual or scheduled,
+is logged to `data/snapshots/drift_log.txt`.
+
+The **Live intel** rail on the app's Draft view can also start and
+stop the local wrapper the n8n schedule calls, and shows the
+snapshot count and the biggest recent drift.
 
 ## Optional: scheduling Meta-Watcher with n8n
 

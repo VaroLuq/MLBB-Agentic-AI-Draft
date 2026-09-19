@@ -23,4 +23,17 @@ data/raw/*
 data/eval_results/*
 !data/eval_results/.gitkeep
 
+secrets/*
+secrets/
+
 .DS_Store
+
+# Tailwind standalone CLI (112 MB binary) — download it into tools/ to
+# rebuild src/web/static/app.css; the built CSS itself IS committed.
+tools/
+
+# Impeccable working artifacts: review screenshots and decision-page state are
+# regenerated per run. The surface brief (.impeccable/surfaces/) and, once
+# written, .impeccable/design.json stay tracked.
+.impeccable/review/
+.impeccable/questions/

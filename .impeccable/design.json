@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-19T00:00:00Z",
+  "title": "Design System: Draft Copilot",
+  "extensions": {
+    "colorMeta": {
+      "gold": { "role": "primary", "displayName": "Draft Gold", "canonical": "#e8c547", "tonalRamp": ["#3d3110", "#6b551a", "#b8912b", "#e8c547", "#f4dc7e", "#f8e8a8", "#fbf1c9", "#fdf8e6"] },
+      "ally": { "role": "secondary", "displayName": "Ally Slate-Blue", "canonical": "#4a90d9", "tonalRamp": ["#12233a", "#163050", "#2b4c78", "#4a90d9", "#7fbaf5", "#a6d0f8", "#cde5fb", "#e8f2fd"] },
+      "enemy": { "role": "tertiary", "displayName": "Enemy Red", "canonical": "#c0392b", "tonalRamp": ["#2b1518", "#3a1c1f", "#6a2b28", "#c0392b", "#f28577", "#f6a89e", "#fac9c3", "#fde7e4"] },
+      "stage-900": { "role": "neutral", "displayName": "Blue-Black Stage", "canonical": "#101820", "tonalRamp": ["#0a1017", "#101820", "#131d28", "#16212d", "#1d2b3a", "#263749", "#3a4a5c", "#5d7188"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#e8edf3", "tonalRamp": ["#6f7c8b", "#8d9aa9", "#b4bfcb", "#e8edf3"] },
+      "danger": { "role": "status", "displayName": "Alarm Coral", "canonical": "#ff7a7a", "tonalRamp": ["#2b1a1d", "#3a1d21", "#7a3535", "#ff7a7a"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "The lead pick's hero name only." },
+      "headline": { "displayName": "Headline", "purpose": "Page and note-reader titles." },
+      "title": { "displayName": "Title", "purpose": "Panel, team and prose headings; hero names in slots and picks at 1.625rem." },
+      "body": { "displayName": "Body", "purpose": "Default text and rationale, capped at 66 to 72ch." },
+      "label": { "displayName": "Label", "purpose": "Buttons, nav, segments, group labels; uppercase." },
+      "caption": { "displayName": "Caption", "purpose": "Tags, hints, tile names, meter labels." }
+    },
+    "shadows": [
+      { "name": "toast-lift", "value": "0 8px 20px rgb(0 0 0 / .35)", "purpose": "Toasts only." },
+      { "name": "lamp-halo", "value": "0 0 0 3px color-mix(in oklab, currentTone 22%, transparent)", "purpose": "Status lamp state ring." }
+    ],
+    "motion": [
+      { "name": "ease-out-fast", "value": "150ms ease-out", "purpose": "Color, edge and 1px lift transitions." },
+      { "name": "ease-expo-enter", "value": "180-260ms cubic-bezier(.16, 1, .3, 1)", "purpose": "Reveal entrances and the lock-in flip (260ms)." },
+      { "name": "meter-fill", "value": "250ms ease-out", "purpose": "Confidence meter cell fill." },
+      { "name": "reduced-motion", "value": "1ms", "purpose": "prefers-reduced-motion collapses animation and transition." }
+    ],
+    "breakpoints": [
+      { "name": "stage-collapse", "value": "1180px" },
+      { "name": "compact", "value": "760px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one gold action per view.",
+      "html": "<button class=\"ds-btn ds-btn-primary\">Get recommendation</button>",
+      "css": ".ds-btn { --cut: 8px; position: relative; isolation: isolate; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 16px; border: 0; background: none; color: var(--color-ink, #e8edf3); font: 600 0.8125rem/1 Barlow, system-ui, sans-serif; letter-spacing: .07em; text-transform: uppercase; cursor: pointer; transition: transform 150ms ease-out; } .ds-btn::before, .ds-btn::after { content: ''; position: absolute; z-index: -1; pointer-events: none; } .ds-btn::before { inset: 0; background: #b8912b; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px); } .ds-btn::after { inset: 1px; background: linear-gradient(180deg, #f4dc7e, #e8c547 62%, #d9b23a); clip-path: polygon(9.4px 0, 100% 0, 100% calc(100% - 9.4px), calc(100% - 9.4px) 100%, 0 100%, 0 9.4px); } .ds-btn-primary { min-height: 48px; padding: 0 26px; font-size: 0.9375rem; font-weight: 700; color: #1a1405; } .ds-btn-primary:hover::before { background: #f4dc7e; } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: none; } .ds-btn-primary:focus-visible::before { background: #f4dc7e; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Default chamfered steel button.",
+      "html": "<button class=\"ds-btn-2\">Clear draft</button>",
+      "css": ".ds-btn-2 { position: relative; isolation: isolate; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 16px; border: 0; background: none; color: #e8edf3; font: 600 0.8125rem/1 Barlow, system-ui, sans-serif; letter-spacing: .07em; text-transform: uppercase; cursor: pointer; } .ds-btn-2::before, .ds-btn-2::after { content: ''; position: absolute; z-index: -1; pointer-events: none; transition: background-color 150ms ease-out; } .ds-btn-2::before { inset: 0; background: #3a4a5c; clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px); } .ds-btn-2::after { inset: 1px; background: #1d2b3a; clip-path: polygon(7.4px 0, 100% 0, 100% calc(100% - 7.4px), calc(100% - 7.4px) 100%, 0 100%, 0 7.4px); } .ds-btn-2:hover::before { background: #5d7188; } .ds-btn-2:hover::after { background: #263749; } .ds-btn-2:focus-visible { outline: none; } .ds-btn-2:focus-visible::before { background: #f4dc7e; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Native input, restyled, plain rectangle.",
+      "html": "<input class=\"ds-field\" placeholder=\"Search heroes\">",
+      "css": ".ds-field { width: 100%; min-height: 42px; padding: 0 12px; font: 500 0.9375rem/1.4 Barlow, system-ui, sans-serif; color: #e8edf3; background: #0a1017; border: 1px solid #2a3646; border-radius: 2px; transition: border-color 150ms ease-out; } .ds-field::placeholder { color: #8d9aa9; opacity: 1; } .ds-field:hover { border-color: #3a4a5c; } .ds-field:focus-visible { outline: 2px solid #f4dc7e; outline-offset: 1px; border-color: #b8912b; }"
+    },
+    {
+      "name": "Nav Tabs",
+      "kind": "nav",
+      "refersTo": "button-quiet",
+      "description": "Top bar tabs; current tab gets gold text and a 2px gold underline.",
+      "html": "<nav class=\"ds-nav\"><a href=\"#\" aria-current=\"page\">Draft</a><a href=\"#\">Notebook</a></nav>",
+      "css": ".ds-nav { display: flex; gap: 4px; background: #0a1017; border-bottom: 1px solid #2a3646; } .ds-nav a { display: inline-flex; align-items: center; min-height: 60px; padding: 0 14px; color: #b4bfcb; text-decoration: none; font: 600 0.8125rem/1 Barlow, system-ui, sans-serif; letter-spacing: .09em; text-transform: uppercase; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color 150ms ease-out, border-color 150ms ease-out; } .ds-nav a:hover { color: #e8edf3; } .ds-nav a:focus-visible { outline: 2px solid #f4dc7e; outline-offset: -2px; } .ds-nav a[aria-current='page'] { color: #f4dc7e; border-bottom-color: #e8c547; }"
+    },
+    {
+      "name": "Segment Chip",
+      "kind": "chip",
+      "refersTo": "seg-face",
+      "description": "Lane and assign-to option; selected state is gold-deep with a gold-lo edge.",
+      "html": "<span class=\"ds-seg\">Jungle</span> <span class=\"ds-seg ds-seg-on\">Mid</span>",
+      "css": ".ds-seg { position: relative; isolation: isolate; display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; font: 600 0.8125rem/1 Barlow, system-ui, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #b4bfcb; } .ds-seg::before, .ds-seg::after { content: ''; position: absolute; z-index: -1; } .ds-seg::before { inset: 0; background: #2a3646; clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px); } .ds-seg::after { inset: 1px; background: #131d28; clip-path: polygon(6.4px 0, 100% 0, 100% calc(100% - 6.4px), calc(100% - 6.4px) 100%, 0 100%, 0 6.4px); } .ds-seg-on { color: #f4dc7e; } .ds-seg-on::before { background: #b8912b; } .ds-seg-on::after { background: #3d3110; }"
+    },
+    {
+      "name": "Team Panel (Ally)",
+      "kind": "card",
+      "refersTo": "panel-ally",
+      "description": "Whole-panel ally tint with a filled slot.",
+      "html": "<section class=\"ds-team\"><h3 class=\"ds-team-title\">Allies</h3><div class=\"ds-slot\"><span class=\"ds-slot-num\">1</span><span class=\"ds-slot-name\">Lolita</span></div></section>",
+      "css": ".ds-team { position: relative; isolation: isolate; padding: 16px; width: 272px; } .ds-team::before, .ds-team::after { content: ''; position: absolute; z-index: -1; } .ds-team::before { inset: 0; background: color-mix(in oklab, #4a90d9 58%, #2a3646); clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px); } .ds-team::after { inset: 1px; background: #12233a; clip-path: polygon(13.4px 0, 100% 0, 100% calc(100% - 13.4px), calc(100% - 13.4px) 100%, 0 100%, 0 13.4px); } .ds-team-title { margin: 0 0 12px; font: 700 1.25rem/1.1 'Barlow Condensed', 'Arial Narrow', sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #7fbaf5; } .ds-slot { position: relative; isolation: isolate; display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 8px 12px; color: #e8edf3; } .ds-slot::before, .ds-slot::after { content: ''; position: absolute; z-index: -1; } .ds-slot::before { inset: 0; background: #2b4c78; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px); } .ds-slot::after { inset: 1px; background: #173151; clip-path: polygon(9.4px 0, 100% 0, 100% calc(100% - 9.4px), calc(100% - 9.4px) 100%, 0 100%, 0 9.4px); } .ds-slot-num { width: 40px; text-align: center; font: 700 1.25rem/1 'Barlow Condensed', sans-serif; color: #8d9aa9; } .ds-slot-name { font: 700 1.625rem/1 'Barlow Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: .04em; }"
+    },
+    {
+      "name": "Lead Pick",
+      "kind": "custom",
+      "refersTo": "lead-pick",
+      "description": "The recommendation locked in: gold 2px edge, initials badge, Condensed name, gold meter.",
+      "html": "<article class=\"ds-lead\"><span class=\"ds-portrait\">GA</span><div><h3 class=\"ds-lead-name\">Gatotkaca</h3><div class=\"ds-meter\"><i class=\"on\"></i><i class=\"on\"></i><i class=\"on\"></i><i></i><i></i></div></div></article>",
+      "css": ".ds-lead { position: relative; isolation: isolate; display: grid; grid-template-columns: auto 1fr; gap: 20px; padding: 22px; color: #e8edf3; } .ds-lead::before, .ds-lead::after { content: ''; position: absolute; z-index: -1; } .ds-lead::before { inset: 0; background: #e8c547; clip-path: polygon(18px 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%, 0 18px); } .ds-lead::after { inset: 2px; background: linear-gradient(135deg, #24303a 0%, #16212d 46%); clip-path: polygon(16.8px 0, 100% 0, 100% calc(100% - 16.8px), calc(100% - 16.8px) 100%, 0 100%, 0 16.8px); } .ds-portrait { display: inline-grid; place-items: center; width: 96px; height: 96px; font: 700 2.16rem/1 'Barlow Condensed', sans-serif; letter-spacing: .04em; color: #f1f5f9; background: linear-gradient(155deg, #3d50a8, #25337a 78%); outline: 2px solid #f4dc7e; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px); } .ds-lead-name { margin: 0 0 12px; font: 700 2.5rem/.95 'Barlow Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: .03em; } .ds-meter { display: inline-flex; gap: 3px; } .ds-meter i { display: block; width: 14px; height: 14px; background: #263749; transform: skewX(-18deg); } .ds-meter i.on { background: #e8c547; }"
+    },
+    {
+      "name": "Banned Hero Cell",
+      "kind": "custom",
+      "refersTo": "hero-tile",
+      "description": "Ban strip cell with the diagonal hazard band.",
+      "html": "<div class=\"ds-ban\"><span class=\"ds-strike\"></span><span class=\"ds-ban-name\">Aamon</span></div>",
+      "css": ".ds-ban { position: relative; isolation: isolate; display: flex; flex-direction: column; align-items: center; width: 64px; padding: 7px 2px 6px; color: #b4bfcb; } .ds-ban::before, .ds-ban::after { content: ''; position: absolute; z-index: -1; } .ds-ban::before { inset: 0; background: #2a3646; clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px); } .ds-ban::after { inset: 1px; background: #131d28; clip-path: polygon(6.4px 0, 100% 0, 100% calc(100% - 6.4px), calc(100% - 6.4px) 100%, 0 100%, 0 6.4px); } .ds-strike { position: absolute; inset: 1px; z-index: 2; pointer-events: none; background: repeating-linear-gradient(-45deg, rgb(10 16 23 / 0) 0 4px, rgb(255 122 122 / .42) 4px 6px); } .ds-ban-name { margin-top: 30px; font: 500 0.75rem/1.1 Barlow, system-ui, sans-serif; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Pick/Ban Screen",
+    "overview": "The interface is Mobile Legends' own draft screen rebuilt as a working tool. It sits on a blue-black stage with a faint hex lattice. Two teams face each other across a hero pool, and the recommendation arrives as the next pick locking in. It is a dark, low-light-room product: dense enough to read a full draft at a glance, quiet enough that the one gold thing on screen is always the thing to act on.\n\nThe world has one shape and one color rule. The shape is the chamfer: every panel, button, tile, chip and badge is cut at the top-left and bottom-right corners and edged with a thin steel line. The color rule is that gold is reserved for the primary action, the current selection, and the lead recommendation. Ally slate-blue and enemy red tint entire side panels, so the ally/enemy split is readable from across the room. Stripped of all content, the chamfers, the gold and the blue/red split still identify it.\n\nIt rejects the stacked-form dashboard (three selects above a button). Controls sit where the action is: the lane selector lives in the lock-in bar beside the button it parameterizes, not in the hero pool.",
+    "keyCharacteristics": [
+      "Blue-black stage (#101820) with a hex lattice at about 3% white and a soft radial glow at the top.",
+      "One silhouette: chamfered top-left and bottom-right, 1px steel edge, inner fill layer.",
+      "Gold is scarce and semantic: act, selected, lead.",
+      "Ally slate-blue and enemy red tint whole panels, never just accents.",
+      "Condensed uppercase display type for names and headings; Barlow for everything readable.",
+      "Flat by default: depth comes from edge and fill tone, not shadow.",
+      "Motion is short and honest: one authored flip, live loading, nothing decorative."
+    ],
+    "rules": [
+      { "name": "The Gold Is a Verb Rule", "body": "Gold appears only on the primary action, the current selection, and the lead recommendation (plus focus, which is always gold-hi). If two golds compete on one screen, one of them is wrong.", "section": "colors" },
+      { "name": "The Whole-Panel Rule", "body": "Team color tints the fill and edge of a whole side panel and its slots. It is never reduced to a small dot or label beside a neutral panel.", "section": "colors" },
+      { "name": "The Disabled-Only Rule", "body": "Ink 4 is for disabled text only. Any text that must be read uses Ink 3 or lighter.", "section": "colors" },
+      { "name": "The Names Are Condensed Rule", "body": "Hero names in slots, picks and the lead are Barlow Condensed 700 uppercase; every other hero mention in a list or sentence is Barlow.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Surfaces are flat at rest and use edge and fill tone for hierarchy. A new surface does not get a shadow.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do cut every surface with the chamfer (top-left and bottom-right) and build its edge with the edge-plus-fill layers; express state by changing the edge and fill values.",
+      "Do reserve gold for the primary action, the current selection and the lead recommendation; focus is always a 2px gold-hi edge.",
+      "Do tint whole side panels with ally slate-blue or enemy red and let slots inherit a deeper tint of the same hue.",
+      "Do mark bans with the diagonal hazard band so the state reads without color.",
+      "Do set hero names in Barlow Condensed 700 uppercase, and everything else in Barlow at the fixed rem scale.",
+      "Do keep every interactive target at least 32px high (34px for icon buttons, 40 to 48px for buttons).",
+      "Do keep motion between 150 and 250ms, and honor prefers-reduced-motion.",
+      "Do use Ink 3 or lighter for any text that must be read."
+    ],
+    "donts": [
+      "Don't use gold for decoration, for a second competing button, or for ordinary hover.",
+      "Don't build the tool as stacked selects above a button; keep parameters beside the action they configure.",
+      "Don't use real or scraped MLBB hero art; portraits stay placeholder initials badges on the eight muted tone pairs.",
+      "Don't use Barlow Condensed for running text, controls or data, and don't use fluid type.",
+      "Don't add shadows to surfaces; depth is edge and fill.",
+      "Don't signal ally, enemy or banned by color alone; keep the whole-panel split and the hazard band.",
+      "Don't use Ink 4 for readable text."
+    ]
+  }
+}

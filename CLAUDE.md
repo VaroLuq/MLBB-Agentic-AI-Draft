@@ -39,7 +39,56 @@ self-repair loop). See README.md for full phase-by-phase status.
   the prompt (not buried in the general stats block) — see the
   empirical findings below for why position/framing, not just
   presence, turned out to matter.
-- **Dashboard** (`src/ui/app.py`) — Streamlit, calls the agent directly.
+- **Web app** (`src/web/`, replaced the Streamlit dashboard `src/ui/app.py`,
+  now deleted) — a Flask JSON API (`server.py`) wrapping the agents, RAG
+  and Meta-Watcher with ZERO backend logic changes, plus a static frontend
+  in `src/web/static/` (HTML, Tailwind v4 built by the standalone CLI into
+  a committed `app.css`, vanilla ES modules, self-hosted Barlow fonts, no
+  runtime CDN). Run: `python -m src.web.server [--open]` / `run_dashboard.bat`
+  (port 8600, `DRAFT_COPILOT_PORT` overrides). Decisions worth keeping:
+  - **Security posture**: this API can delete note files and launch a
+    subprocess, so unlike the Meta-Watcher wrapper (0.0.0.0 for Docker) it
+    binds loopback only, rejects non-loopback Host headers (DNS rebinding),
+    and requires an `X-Requested-With: draft-copilot` header on every
+    POST/PUT/DELETE (cross-origin pages can't set it without a CORS
+    preflight, which is never granted). Note ids are validated against the
+    `general/x` / `heroes/<Name>/x` shape and re-resolved under `data/raw/`
+    before any read/write/delete (`notes_store.py`). Verified live: forged
+    request 403, traversal 404/405, bad hero 400, wrong Host 403.
+  - **`notes_store.py`** owns note CRUD over the same folder convention
+    `note_loader.py` reads. Knowledge-base freshness is a fingerprint of
+    the notes written to `vectorstore/.notes_signature` after a rebuild
+    THROUGH THE APP; with no fingerprint the state is reported STALE
+    ("unknown"), deliberately — an mtime comparison can't see deleted
+    notes, which may still be indexed. CLI-only rebuilds therefore read
+    as stale until one rebuild via the app.
+  - **`watcher_control.py`** is the Streamlit start/stop ported off
+    `session_state`: status is a real TCP check on the wrapper's port (not
+    "did I launch it"), start returns immediately and the UI polls (the
+    wrapper runs its catch-up snapshot BEFORE listening, so "alive but not
+    listening yet" is normal), stop falls back to a Windows port-kill.
+  - **`evidence.py`** derives, per recommended hero, which supporting
+    evidence actually appeared in the agent's own context (tier list,
+    counter/synergy data, retrieved notes) by parsing `live_stats_summary`
+    / `retrieved_notes`. The UI shows tags like "Counters Aamon" and an
+    amber "Model knowledge only" tag when nothing backs a pick — it
+    surfaces the grounding gap the Aamon/exp trace found. Changes nothing
+    about how recommendations are produced.
+  - **Latency reality**: a real Aamon/exp request through the API took 98s
+    on the first call after startup (model load + concurrent warm-up),
+    vs ~20-30s warm. The loading UI says so honestly instead of showing
+    fake stage progress.
+  - **Design**: visual world "The Draft Screen, Rebuilt" (MLBB's own
+    pick/ban screen grammar), chosen via impeccable's direction round;
+    product truth in `PRODUCT.md`, contract in
+    `.impeccable/surfaces/src-web-static-index-html.md`. Code-led build
+    (no usable image generation: impeccable's fallback wants
+    `OPENAI_API_KEY`; the Gemini key/docs-MCP in `.env` are NOT wired in and
+    no image was generated). Hero portraits are deliberate placeholder
+    initials badges — no game art exists or was scraped/generated.
+  - Rebuild CSS: download the Tailwind standalone CLI into `tools/`
+    (git-ignored, 112 MB) then `tools\tailwindcss.exe -i
+    src/web/styles/input.css -o src/web/static/app.css --minify`.
 - **Eval harness** (`src/eval/`, Phase 7) — two independent pieces so
   far, deliberately separated because a bad recommendation could be
   either the LLM's fault or the retriever's fault and you want to
@@ -294,7 +343,7 @@ self-repair loop). See README.md for full phase-by-phase status.
   every call — see `get_cached_chain`-style patterns in `src/agents/llm.py`
   and `src/rag/vectorstore.py`. `clear_vectorstore_cache()` must be
   called after any re-ingestion from a long-lived process (e.g. the
-  Streamlit app) to avoid stale connections.
+  web app) to avoid stale connections.
 - API client functions are written defensively (`.get()` with
   fallbacks) rather than assuming documented schemas are accurate —
   this API's docs have been wrong before.
@@ -324,6 +373,30 @@ this file's writing:
   findings entry below (`catch_up_if_stale`). Still no auto-start, so
   a missed window only gets backfilled once you actually restart it,
   not the moment it's missed.
+- UI migration (2026-09-19): the Streamlit dashboard was replaced by the
+  Flask + HTML/Tailwind web app in `src/web/` (see Architecture). Passed
+  an independent finish review (verdict: ship, after one fix round:
+  nested cards, gold-reservation breach, an unlabeled model score that
+  read as a win probability, sticky mobile header, lead-card weight,
+  one contrast miss). VERIFIED: every API endpoint live (CRUD, guards,
+  a real Aamon/exp recommendation with correct evidence tags); every JS
+  module parses as ES modules; headless-Chrome captures of the draft,
+  result, loading, failure, notebook and dialog states at 1440 and a
+  true 390px viewport. NOT VERIFIED: a real click-through of the browser
+  UI against the live LLM (the result/failure captures used a fetch stub
+  of `/api/recommend` shaped from a real response); the edit/delete/
+  rebuild/Meta-Watcher-toggle handlers were exercised server-side but
+  not driven through the UI; touch scrolling in the hero pool's inner
+  scroll region; real keyboard/screen-reader passes. Known state: the
+  header shows "Rebuild needed" until one knowledge-base rebuild is done
+  through the app (records the notes fingerprint).
+  `retrieval_golden_set.py` is now STALE: three notes it references
+  (general philosophy, Dyrroth, one Esmeralda) were deleted from
+  `data/raw/`, so `retrieval_eval` will report misses that are label
+  drift, not retrieval failure — re-label before trusting it.
+  Ideas not built: a "lock in" action on the lead pick that places it in
+  the next empty ally slot; real hero portraits (licensing);
+  optional decorative raster via the Gemini key (unwired, cost unconfirmed).
 - Phase 7 (eval harness) IN PROGRESS, being built collaboratively
   with the user (who explicitly asked to be guided through eval
   methodology, not just handed a finished harness — keep that
