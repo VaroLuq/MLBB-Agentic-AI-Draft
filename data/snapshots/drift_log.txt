@@ -247,3 +247,13 @@ Meta drift from 2026-09-16T14:05:51.199888+00:00 to 2026-09-19T10:37:28.859652+0
 --- 2026-09-19T10:47:36.068983+00:00 ---
 Snapshot saved to: data/snapshots/20260919_104736.json
 No significant drift between 2026-09-19T10:37:28.859652+00:00 and 2026-09-19T10:47:36.068074+00:00.
+
+--- 2026-09-20T10:37:44.872242+00:00 ---
+Snapshot saved to: data/snapshots/20260920_103744.json
+Meta drift from 2026-09-19T10:47:36.068074+00:00 to 2026-09-20T10:37:44.871295+00:00:
+  [DOWN] Melissa ban_rate: 0.207 -> 0.174 (-0.033)
+  [DOWN] Gloo ban_rate: 0.419 -> 0.393 (-0.027)
+  [UP] Masha ban_rate: 0.036 -> 0.060 (+0.024)
+  [DOWN] Belerick ban_rate: 0.554 -> 0.530 (-0.024)
+  [DOWN] Sun ban_rate: 0.275 -> 0.254 (-0.021)
+  [DOWN] Marcel ban_rate: 0.328 -> 0.308 (-0.020)
