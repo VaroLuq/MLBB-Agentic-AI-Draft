@@ -257,3 +257,11 @@ Meta drift from 2026-09-19T10:47:36.068074+00:00 to 2026-09-20T10:37:44.871295+0
   [DOWN] Belerick ban_rate: 0.554 -> 0.530 (-0.024)
   [DOWN] Sun ban_rate: 0.275 -> 0.254 (-0.021)
   [DOWN] Marcel ban_rate: 0.328 -> 0.308 (-0.020)
+
+--- 2026-09-21T11:59:55.637651+00:00 ---
+Snapshot saved to: data/snapshots/20260921_115955.json
+Meta drift from 2026-09-20T10:37:44.871295+00:00 to 2026-09-21T11:59:55.636701+00:00:
+  [DOWN] Melissa ban_rate: 0.174 -> 0.140 (-0.034)
+  [UP] Masha ban_rate: 0.060 -> 0.083 (+0.023)
+  [DOWN] Gloo ban_rate: 0.393 -> 0.370 (-0.023)
+  [DOWN] Sun ban_rate: 0.254 -> 0.234 (-0.020)
