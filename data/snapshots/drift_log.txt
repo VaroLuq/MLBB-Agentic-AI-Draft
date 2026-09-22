@@ -265,3 +265,8 @@ Meta drift from 2026-09-20T10:37:44.871295+00:00 to 2026-09-21T11:59:55.636701+0
   [UP] Masha ban_rate: 0.060 -> 0.083 (+0.023)
   [DOWN] Gloo ban_rate: 0.393 -> 0.370 (-0.023)
   [DOWN] Sun ban_rate: 0.254 -> 0.234 (-0.020)
+
+--- 2026-09-22T10:57:58.243371+00:00 ---
+Snapshot saved to: data/snapshots/20260922_105758.json
+Meta drift from 2026-09-21T11:59:55.636701+00:00 to 2026-09-22T10:57:58.242450+00:00:
+  [DOWN] Melissa ban_rate: 0.140 -> 0.111 (-0.029)
