@@ -23,8 +23,8 @@ data/raw/*
 data/eval_results/*
 !data/eval_results/.gitkeep
 
-secrets/*
-secrets/
+misc/*
+misc/
 
 .DS_Store
 
@@ -37,3 +37,6 @@ tools/
 # written, .impeccable/design.json stay tracked.
 .impeccable/review/
 .impeccable/questions/
+
+JEV.md
+LAYA.md

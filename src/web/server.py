@@ -232,6 +232,7 @@ def recommend():
         "filtered_out": _filtered_out(result),
         "live_stats_summary": live,
         "lane_filtered_stats": result.get("lane_filtered_stats_text"),
+        "lane_filtered_aggregate": result.get("lane_filtered_aggregate") or [],
         "retrieved_notes": notes,
         "elapsed_seconds": elapsed,
         "role_needed": role,

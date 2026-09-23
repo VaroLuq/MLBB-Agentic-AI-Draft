@@ -420,10 +420,33 @@ function pickRow(rec, rank, animate) {
 }
 
 // ---------------------------------------------------------- diagnostics
+// Cumulative counter/synergy totals per lane-eligible hero. The
+// lane-filtered block above answers "who counters this one enemy?" once
+// per enemy, so a hero who counters two of them reads as two unrelated
+// bullets; this adds them up. Rendered as aligned monospace because it
+// shares the diagnostics <pre> with the other raw views.
+function aggregateText(rows) {
+  if (!rows?.length) return "";
+  const num = (v, signed) => v == null ? "—" : `${signed && v > 0 ? "+" : ""}${v.toFixed(3)}`;
+  const width = Math.max(4, ...rows.map((r) => r.name.length));
+  const source = (r) => [
+    r.counters?.length ? `counters ${r.counters.join(", ")}` : null,
+    r.synergises_with?.length ? `synergy ${r.synergises_with.join(", ")}` : null,
+  ].filter(Boolean).join(" · ");
+
+  return [
+    "\nCumulative impact (lane-eligible heroes, strongest first):",
+    `  ${"HERO".padEnd(width)}  ${"WIN".padStart(6)}  ${"COUNTER".padStart(8)}  ${"SYNERGY".padStart(8)}  SOURCE`,
+    ...rows.map((r) => `  ${r.name.padEnd(width)}  ${num(r.win_rate).padStart(6)}  ` +
+      `${num(r.cumulative_counter_impact, true).padStart(8)}  ` +
+      `${num(r.cumulative_synergy_impact, true).padStart(8)}  ${source(r)}`),
+  ].join("\n");
+}
+
 function diagnostics(data, forceOpen = false) {
   const open = diagOpen || forceOpen;
   const tabs = [
-    { id: "live", label: "Live stats", text: [data.live_stats_summary, data.lane_filtered_stats && `\nLane-filtered:\n${data.lane_filtered_stats}`].filter(Boolean).join("\n") || "No live stats were gathered." },
+    { id: "live", label: "Live stats", text: [data.live_stats_summary, data.lane_filtered_stats && `\nLane-filtered:\n${data.lane_filtered_stats}`, aggregateText(data.lane_filtered_aggregate)].filter(Boolean).join("\n") || "No live stats were gathered." },
     { id: "notes", label: "Notes retrieved", text: data.retrieved_notes || "No notes were retrieved." },
     { id: "raw", label: "Model output", text: [data.parse_error && `Validation error:\n${data.parse_error}\n`, data.raw_llm_output || "No output."].filter(Boolean).join("\n") },
   ];

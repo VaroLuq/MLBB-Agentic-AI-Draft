@@ -5,6 +5,18 @@ from rone_arena import RoneArenaError
 
 load_dotenv()
 
+# Every stats endpoint reports win rates over a trailing window, and the
+# value only means something alongside the window that produced it. The
+# three endpoints defaulted to three different ones — heroes_rank to 7
+# days, hero_counters to 15, and hero_compatibility to 1 (verified: its
+# no-days response matches the rank endpoint at days=1 exactly, on
+# Benedetta, Gloo, Thamuz and Atlas). That made the synergy numbers a
+# single day of matches sitting next to 15 days of counter data, and it
+# made any arithmetic across the two measure window drift as much as
+# matchup effect — Benedetta's own drift between windows (0.5324 -> 0.5273)
+# is larger than most of the counter deltas involved.
+DEFAULT_WINDOW_DAYS = 7
+
 _client = None
 
 
@@ -109,7 +121,8 @@ def _parse_hero_relation_response(records: list[dict], sub_hero_field: str) -> l
 
 
 def get_hero_counters(
-    hero_identifier: str, rank: str = "all", size: int = 10, days: int = 15,
+    hero_identifier: str, rank: str = "all", size: int = 10,
+    days: int = DEFAULT_WINDOW_DAYS,
 ) -> list[dict]:
 
     client = get_client()
@@ -126,12 +139,18 @@ def get_hero_counters(
     return _parse_hero_relation_response(records, "sub_hero_last")
 
 
-def get_hero_compatibility(hero_identifier: str, rank: str = "all", size: int = 10) -> list[dict]:
-   
+def get_hero_compatibility(
+    hero_identifier: str, rank: str = "all", size: int = 10,
+    days: int = DEFAULT_WINDOW_DAYS,
+) -> list[dict]:
+    # `days` is accepted by this endpoint but was never passed, leaving it
+    # on its 1-day default — see DEFAULT_WINDOW_DAYS. Verified supported:
+    # at days=7 every returned hero_win_rate matches heroes_rank at days=7
+    # exactly (Miya and Gusion, 10/10 heroes).
     client = get_client()
     try:
         response = client.heroes.hero_compatibility(
-            hero_identifier=hero_identifier, rank=rank, size=size, index=1,
+            hero_identifier=hero_identifier, days=days, rank=rank, size=size, index=1,
         )
     except RoneArenaError as e:
         raise RuntimeError(

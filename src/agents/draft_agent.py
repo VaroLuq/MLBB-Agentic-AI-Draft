@@ -41,6 +41,7 @@ class DraftState(TypedDict, total=False):
     valid_lane_heroes: list[str] | None
     lane_roster_text: str | None
     lane_filtered_stats_text: str | None
+    lane_filtered_aggregate: list[dict]
     raw_llm_output: str
     parsed_recommendation: dict | None
     parse_error: str | None
@@ -112,6 +113,45 @@ def gather_live_stats(state: DraftState) -> DraftState:
     valid_lane_lower = {h.lower() for h in valid_lane_heroes} if valid_lane_heroes else None
     lane_filtered_sections = []
 
+    # Per-hero running totals across every relation fetched below. The
+    # lane-filtered text section answers "who counters this one enemy?"
+    # once per enemy; this answers "how good is this hero against the
+    # enemy team as a whole?" — a hero countering two enemies (or
+    # synergising with two allies) only shows up as two unrelated
+    # bullets otherwise, and nothing adds them up. Keyed by lowercased
+    # name, matching how the lane filter compares names.
+    aggregate: dict[str, dict] = {}
+    # win_rate is whichever source reaches the hero first, which is safe
+    # only because both endpoints now run on the same trailing window
+    # (rone_arena_client.DEFAULT_WINDOW_DAYS). They used to disagree —
+    # counters on 15 days, compatibility on 1 — and the same hero could
+    # carry a different base win rate depending on fetch order.
+
+    def _accumulate(record: dict, opponent: str, is_counter: bool) -> None:
+        name = record.get("name")
+        if not name:
+            return
+        if valid_lane_lower is not None and name.lower() not in valid_lane_lower:
+            return
+        entry = aggregate.setdefault(name.lower(), {
+            "name": name,
+            "win_rate": None,
+            "cumulative_counter_impact": 0.0,
+            "cumulative_synergy_impact": 0.0,
+            "counters": [],
+            "synergises_with": [],
+        })
+        impact = record.get("increase_win_rate") or 0.0
+        if is_counter:
+            entry["cumulative_counter_impact"] += impact
+            entry["counters"].append(opponent)
+        else:
+            entry["cumulative_synergy_impact"] += impact
+            entry["synergises_with"].append(opponent)
+
+        if entry["win_rate"] is None and record.get("win_rate") is not None:
+            entry["win_rate"] = record["win_rate"]
+
     for enemy in state.get("enemy_picks", []):
         try:
             counters = get_hero_counters(enemy, size=5)
@@ -121,6 +161,9 @@ def gather_live_stats(state: DraftState) -> DraftState:
                     f"- {c['name']} (win_rate={c['win_rate']:.3f}, "
                     f"increase_win_rate={c['increase_win_rate']:.3f})"
                 )
+
+            for c in counters:
+                _accumulate(c, enemy, is_counter=True)
 
             if valid_lane_lower is not None:
                 matches = [c["name"] for c in counters if c["name"].lower() in valid_lane_lower]
@@ -145,6 +188,9 @@ def gather_live_stats(state: DraftState) -> DraftState:
                     f"increase_win_rate={c['increase_win_rate']:.3f})"
                 )
 
+            for c in compat:
+                _accumulate(c, ally, is_counter=False)
+
             if valid_lane_lower is not None:
                 matches = [c["name"] for c in compat if c["name"].lower() in valid_lane_lower]
                 if matches:
@@ -160,6 +206,17 @@ def gather_live_stats(state: DraftState) -> DraftState:
 
     state["lane_filtered_stats_text"] = (
         "\n".join(lane_filtered_sections) if lane_filtered_sections else None
+    )
+
+    # Ordered strongest-first. Counter impact is negative-is-better and
+    # synergy positive-is-better, so the sort key flips the counter sign
+    # to put a hero who does both at the top. This is presentation order
+    # only — no composite score is stored, since how the two axes should
+    # be weighted against each other isn't established.
+    state["lane_filtered_aggregate"] = sorted(
+        aggregate.values(),
+        key=lambda h: h["cumulative_synergy_impact"] - h["cumulative_counter_impact"],
+        reverse=True,
     )
 
     state["live_stats_summary"] = "\n".join(lines)
