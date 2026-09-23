@@ -39,6 +39,27 @@ self-repair loop). See README.md for full phase-by-phase status.
   the prompt (not buried in the general stats block) — see the
   empirical findings below for why position/framing, not just
   presence, turned out to matter.
+- **Cumulative counter/synergy aggregate** (2026-09-23,
+  `gather_live_stats` -> `DraftState["lane_filtered_aggregate"]`) —
+  built FOR the Jev experiment (see below), NOT fed to the LLM: the
+  prompt is deliberately unchanged. `lane_filtered_stats_text` answers
+  "who counters this one enemy?" once per enemy, so a hero who counters
+  two of them reads as two unrelated bullets and nothing adds them up.
+  This accumulates per-hero totals across every relation already
+  fetched (no extra API calls), lane-filtered, one row per hero:
+  `{name, win_rate, cumulative_counter_impact,
+  cumulative_synergy_impact, counters[], synergises_with[]}`. The last
+  two are provenance beyond the originally-specified schema. Ordering
+  is `synergy - counter` (counter impact is negative-is-better) and is
+  presentation only — NO composite score is stored, because how to
+  weight the two axes against each other is not established. Surfaced
+  read-only via `server.py`'s `/api/recommend`
+  (`lane_filtered_aggregate`) and rendered as an aligned monospace
+  table by `aggregateText()` in `src/web/static/js/draft.js`, appended
+  to the existing "Live stats" diagnostics tab. Known limitation: the
+  table is ~75 chars and `.diag pre` sets `white-space: pre-wrap`, so
+  column alignment collapses on a ~390px viewport; left alone rather
+  than change CSS shared by all three diagnostics tabs.
 - **Web app** (`src/web/`, replaced the Streamlit dashboard `src/ui/app.py`,
   now deleted) — a Flask JSON API (`server.py`) wrapping the agents, RAG
   and Meta-Watcher with ZERO backend logic changes, plus a static frontend
@@ -309,6 +330,105 @@ self-repair loop). See README.md for full phase-by-phase status.
   only reflects current stats, not history). Don't re-litigate this
   as an unresolved gap or push auto-start again without new evidence
   the user's priorities changed.
+- FOUND + FIXED (2026-09-23): the three stats endpoints each defaulted
+  to a DIFFERENT trailing window, silently. `heroes_rank` 7 days,
+  `hero_counters` 15, and `hero_compatibility` **1 day** — the last one
+  because `get_hero_compatibility()` never passed `days` at all, not
+  because the endpoint lacks it. Verified by matching win rates across
+  endpoints: `hero_compatibility`'s no-`days` response equals the rank
+  endpoint at `days=1` EXACTLY (six decimals, on Benedetta, Gloo,
+  Thamuz and Atlas), and `hero_counters(days=15)` equals rank at
+  `days=15`. Consequence: synergy data was one single day of matches
+  sitting next to 15 days of counter data, and any arithmetic across
+  the two measured window drift as much as matchup effect —
+  Benedetta's own drift between windows (0.5324 -> 0.5273) is larger
+  than most of the counter deltas involved. Fixed via
+  `rone_arena_client.DEFAULT_WINDOW_DAYS = 7` (user's choice; verified
+  supported on all three endpoints — at `days=7` every compatibility
+  `hero_win_rate` matches rank at `days=7`, 10/10 across Miya and
+  Gusion). After the change, all 6 heroes appearing in both endpoints
+  agree to six decimals, 0 mismatches. Impact of the switch: counters
+  15d->7d changed NOTHING (Aamon and Ixia returned identical 5-hero
+  rosters); synergy 1d->7d churned ~2 of 5 heroes in every ally list
+  (Gusion lost Barats/Thamuz, gained Chang'e/Minotaur; Miya lost
+  Benedetta/Tigreal, gained Franco/Roger; Rafaela lost Baxia/Kalea,
+  gained Kaja/Khufra) — which is itself the evidence that the 1-day
+  synergy data was noise. NOT re-run after this change: the
+  reliability eval. A single Aamon/exp end-to-end run was clean (35.3s,
+  valid JSON first try, 0 constraint violations) but that is not a
+  substitute.
+- CORRECTED (2026-09-23, supersedes an earlier note from the same
+  session): `hero_win_rate` inside a counter/compatibility sub-record
+  is the sub-hero's OVERALL BASE win rate at the requested window, NOT
+  a matchup-specific win rate. It is stable across different queries
+  in the same window and matches `heroes_rank` exactly. An earlier
+  reading of this as "the two endpoints disagree about a hero's win
+  rate" was wrong — they were simply reporting different windows. The
+  base win rate therefore needs NO extra API call. `main_hero_win_rate`
+  (the queried hero's own base rate) is also in the same payload and
+  is currently DISCARDED by `_parse_hero_relation_response`.
+- `increase_win_rate` is a delta on the MAIN (queried) hero, not on the
+  sub-hero: "Counters to Ixia: Benedetta -0.0262" means IXIA's win rate
+  drops 2.6 points when Benedetta is present. There is no field
+  anywhere giving the candidate's own win rate in a specific matchup —
+  the full sub-record is `hero_appearance_rate, hero_index,
+  hero_win_rate, heroid, increase_win_rate, min_win_rate6 ...
+  min_win_rate20`. Those `min_win_rate*` fields are win rate bucketed
+  by game duration (an early/late-game scaling curve) and are
+  completely unused by this project.
+- Log-odds aggregation was EVALUATED AND NOT ADOPTED (2026-09-23).
+  Proposal was to combine pairwise win rates via log-odds addition
+  instead of summing `increase_win_rate` directly. Findings: (a) the
+  proposed function signature wants per-matchup win rates for the
+  candidate, which the API does not provide (see above), so its inputs
+  can't be satisfied without an unjustified zero-sum assumption; (b)
+  on real data it produced the IDENTICAL ranking to naive summing —
+  it works out to a near-constant x4 rescale (ratios 4.007-4.054),
+  because `d(logit)/dp ~ 4` at p~0.5 and all MLBB win rates sit in
+  0.45-0.56 where logit is effectively linear; (c) log-odds addition
+  assumes independence, which is false for correlated matchups, and
+  overstates confidence. It WOULD help at full 5-enemy draft, where
+  naive sums can run away and log-odds saturates gracefully — revisit
+  then, but don't expect it to change today's ordering. Related
+  decision: don't pre-collapse the aggregate into a pseudo-probability
+  before handing state to Jev, whose selling point is calibrated
+  probabilities; feed it the components.
+- RAG currently has NO discriminative power, and this is a corpus-size
+  problem, not a retrieval bug: `data/raw/` holds 4 notes -> 4 chunks
+  in the collection, and `retrieve_notes` queries with `k=4`. Every
+  query therefore returns the ENTIRE knowledge base regardless of what
+  was asked, so nothing is being ranked or excluded. The retrieval
+  eval's 100% hit@4 / MRR 1.0 is measuring a system that cannot miss.
+  Demonstrated 2026-09-23 by an accidental A/B on the Aamon/exp
+  scenario: with retrieval broken (zero notes) and with it working,
+  the agent returned the SAME three heroes in the same order (Gloo,
+  Silvanna, Aulus; one score moved 0.01). None of the 4 notes mention
+  Aamon or the exp lane. The deterministic cross-reference in
+  `gather_live_stats` is doing essentially all the decision work; the
+  LLM's distinct contribution is prose, some of it fabricated (it
+  invented a "good win rate against Aamon" for Aulus, who is not in the
+  counters list at all, and described all-negative `increase_win_rate`
+  values as a "win rate increase" while still ranking them correctly).
+  Fix is writing more notes, not tuning the retriever.
+- GOTCHA: a mismatched `EMBEDDING_MODEL` fails SILENTLY at request
+  time, not at startup. `.env` had been switched to
+  `microsoft/harrier-oss-v1-0.6b` (1024-dim) while the Chroma
+  collection was still built with `all-MiniLM-L6-v2` (384-dim), so
+  every query raised `Embedding dimension 1024 does not match
+  collection dimensionality 384`. `retrieve_notes` catches ALL
+  exceptions and passes the string `"(Could not retrieve notes: ...)"`
+  into the prompt as if it were content, so the agent produced a
+  confident, well-formed, correct-looking answer with zero notes and
+  nothing surfaced to the user. Re-ingest after ANY embedder change.
+  Worth deciding whether retrieval failure should be loud.
+- GOTCHA (Windows): two `python -m src.web.server` processes can BOTH
+  hold `127.0.0.1:8600` in LISTENING state simultaneously, and the
+  OLDER process wins connections. A server left running from an
+  earlier session will therefore serve stale code with no error
+  anywhere, and edits appear to have no effect. Check with
+  `netstat -ano | grep :8600` and match PIDs via
+  `Get-CimInstance Win32_Process`; use `DRAFT_COPILOT_PORT` to test on
+  a separate port rather than killing someone else's process.
 - On this dev machine, outbound HTTPS calls (Rone Arena API, PyPI)
   intermittently/reliably failed with `SSLCertVerificationError:
   unable to get local issuer certificate`. Root cause: Norton
@@ -397,6 +517,40 @@ this file's writing:
   Ideas not built: a "lock in" action on the lead pick that places it in
   the next empty ally slot; real hero portraits (licensing);
   optional decorative raster via the Gemini key (unwired, cost unconfirmed).
+- Jev EXPLORATION (2026-09-23, NOT implemented, nothing wired in).
+  Jev is a third-party "System 1" decision model (TypeSafe AI, released
+  Sept 2026, after this assistant's training cutoff — everything known
+  about it comes from `JEV.md`, which is gitignored/local-only, as is
+  `misc/`). It generates no text: given a `state` plus `questions` it
+  returns typed primitives — `Choice`, `Score` (2-10 level rubric),
+  `Noul` (boolean probability) — with calibrated probabilities in
+  70-500ms, all questions answered in one parallel pass. Access is via
+  the Vercel AI Gateway. `misc/jev_test.py` was fixed this session: the
+  endpoint is `https://ai-gateway.vercel.sh/v1/evaluate`, NOT
+  `gateway.ai.vercel.com` (that host resolves to a Vercel anycast IP,
+  so DNS looks fine, but drops the TLS handshake — surfaces on Windows
+  as a misleading `ConnectionError: ('Connection aborted.',
+  FileNotFoundError(2, ...))` that looks like a missing cert). Also
+  removed a `verify=False` that was disabling TLS verification on a
+  request carrying the API key while fixing nothing. CURRENT BLOCKER,
+  not code: the gateway returns 403
+  `customer_verification_required` — Vercel requires a credit card on
+  file before servicing any request, even on free credits. The key
+  itself authenticates fine (`GET /v1/models` returns the model list,
+  and `/v1/evaluate` validates the payload schema). STILL UNVERIFIED
+  because of that gate: whether `typesafe-ai/jev` is the right model
+  slug, and whether the response keys `jev_test.py` reads
+  (`answers.<key>.probability` / `.score` / `.confidence`) match what
+  Jev actually returns. Motivation worth keeping straight: the user
+  framed this as speeding up RAG, but per `JEV.md` Jev does no
+  embedding, retrieval or generation, and retrieval is neither slow nor
+  discriminative here (see the 4-chunk finding above). The real target
+  is the 6-15s generation step, which is largely narrating a decision
+  the deterministic cross-reference already made — lane-eligibility is
+  a `Noul`, `priority_score` is a `Score`. Jev cannot produce the
+  free-text `rationale`/`summary` fields at all. A node-by-node mapping
+  of the pipeline onto Jev's three primitives was offered but not yet
+  done.
 - Phase 7 (eval harness) IN PROGRESS, being built collaboratively
   with the user (who explicitly asked to be guided through eval
   methodology, not just handed a finished harness — keep that
