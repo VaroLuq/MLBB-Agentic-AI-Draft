@@ -31,6 +31,47 @@ behaviour, that text is stale — the loop is gone.
   (`src/api_client/rone_arena_client.py`). Deliberately NOT put through
   RAG — this data changes too often and is too precise to risk
   retrieving stale.
+- **Response cache** (`rone_arena_client.py`, 2026-09-24) — a TTL cache
+  keyed per `(endpoint, args)`, default 3600s, overridable with
+  `RONE_CACHE_TTL_SECONDS`. Added because a recommendation costs
+  `2 + len(enemies) + len(allies)` requests and NOTHING was cached:
+  measured, an identical request refetched all 8, and HTTP was ~19-21s
+  of a ~22s `gather_live_stats` in that run.
+  Keyed per endpoint+args, NOT per request. That is the whole point:
+  the win is not the repeated-identical case (rare) but a live draft,
+  where picks accumulate so consecutive requests overlap almost
+  entirely. A whole-request key would essentially never hit. Measured
+  over a realistic 4-request draft: **23 calls -> 8**, with the last
+  and slowest request dropping 8 -> 1 (2.83s), and an identical repeat
+  costing 0 calls / 0.00s. Changing lane with the same picks costs
+  exactly 1 call, since relations are keyed per hero.
+  A generous TTL is safe here: every endpoint reports a 7-day trailing
+  window (DEFAULT_WINDOW_DAYS) and the Meta-Watcher treats a 2-point
+  move between DAILY snapshots as notable, so the underlying numbers
+  move far more slowly than a drafting session.
+  Three implementation choices worth not undoing:
+  - **Returns copies** (`[dict(row) for row in cached]`). Callers get
+    plain dicts they may reasonably mutate, and a mutation reaching the
+    cached list would silently poison every later read.
+  - **The lock is NOT held across the HTTP call.** Two concurrent
+    misses on one key may both fetch — that wastes a request but cannot
+    corrupt the cache or serve stale data. Holding a lock for seconds
+    would be worse.
+  - **Two callers deliberately bypass it with `use_cache=False`**:
+    `meta_watcher.take_snapshot()`, whose entire job is recording stats
+    AS OF `taken_at` — a cache hit would stamp a fresh timestamp onto
+    stale numbers, and since drift is diffed across days that would
+    read as "the meta didn't move" rather than as an error; and
+    `/api/meta`, which backs the "Refresh live intel" button and keeps
+    its own 600s TTL, so layering an hour-long cache underneath would
+    have quietly broken that button.
+  Process-lifetime only — a server restart clears it. A disk cache
+  would survive restarts but adds staleness complexity that was judged
+  not worth it for a local single-user app. `clear_cache()` and
+  `cache_info()` are exported for tests and diagnostics.
+  Jev is deliberately NOT cached (user's call): one call per
+  recommendation at ~$0.0002, and caching it would hide the run-to-run
+  variation `jev_eval.py` exists to measure.
 - **Strategic narrative content** — manually curated by the user
   (`src/rag/`), NOT scraped from the API's community guide feed (that
   was tried and reworked away — see git history / earlier chat — the

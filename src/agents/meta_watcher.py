@@ -21,7 +21,13 @@ DRIFT_THRESHOLDS = {
 
 
 def take_snapshot(days: str = "7", size: int = 50) -> Path:
-    stats = get_hero_rank_stats(days=days, size=size)
+    # use_cache=False deliberately. The client caches responses so a draft
+    # recommendation doesn't refetch the same heroes every request, but a
+    # snapshot's whole purpose is recording the stats AS OF `taken_at`. A
+    # cache hit here would stamp a fresh timestamp onto stale numbers, and
+    # since drift is diffed across days that corruption would be invisible —
+    # it would read as "the meta didn't move", not as an error.
+    stats = get_hero_rank_stats(days=days, size=size, use_cache=False)
     taken_at = datetime.now(timezone.utc)
 
     payload = {

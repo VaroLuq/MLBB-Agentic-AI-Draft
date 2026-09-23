@@ -139,7 +139,12 @@ def heroes():
 def meta():
     size = min(max(request.args.get("size", 8, type=int), 1), 20)
     try:
-        rows = _cached(f"meta:{size}", 600, lambda: get_hero_rank_stats(days="7", size=size))
+        # use_cache=False: this endpoint backs the "Refresh live intel" button,
+        # which is an explicit "show me current data" action. It keeps its own
+        # 600s TTL; layering the client's hour-long cache underneath would mean
+        # refresh could hand back data up to an hour old.
+        rows = _cached(f"meta:{size}", 600,
+                       lambda: get_hero_rank_stats(days="7", size=size, use_cache=False))
     except Exception as exc:
         return _error(
             "stats_unreachable", "Couldn't load the current meta.",

@@ -1,4 +1,8 @@
 import os
+import threading
+import time
+from typing import Callable
+
 from dotenv import load_dotenv
 from rone_arena import RoneArena
 from rone_arena import RoneArenaError
@@ -16,6 +20,66 @@ load_dotenv()
 # matchup effect — Benedetta's own drift between windows (0.5324 -> 0.5273)
 # is larger than most of the counter deltas involved.
 DEFAULT_WINDOW_DAYS = 7
+
+# --- Response cache ---------------------------------------------------
+#
+# A draft recommendation costs 2 + len(enemies) + len(allies) requests, and
+# measured HTTP time dominates the whole node (~19-21s of a ~22s
+# gather_live_stats in one run). Nothing was cached, so an identical request
+# refetched all 8. The real win is not the repeated-identical case but a live
+# draft: picks accumulate, so consecutive requests overlap almost entirely.
+# Caching per (endpoint, args) rather than per request is what makes that
+# overlap count — a whole-request key would essentially never hit.
+#
+# The TTL can afford to be generous: every endpoint now reports over a 7-day
+# trailing window (DEFAULT_WINDOW_DAYS), and the Meta-Watcher treats a 2-point
+# move between daily snapshots as notable, so the underlying numbers move far
+# more slowly than any drafting session.
+CACHE_TTL_SECONDS = float(os.getenv("RONE_CACHE_TTL_SECONDS", "3600"))
+
+_cache: dict[tuple, tuple[float, object]] = {}
+_cache_lock = threading.Lock()
+
+
+def _cached_call(key: tuple, ttl: float, loader: Callable[[], object]) -> object:
+    """Return a cached response, or fetch and store one.
+
+    The lock is deliberately NOT held across `loader()`: an HTTP call can take
+    seconds, and blocking every other reader for that long would be worse than
+    the only thing releasing it costs, which is that two concurrent misses on
+    the same key may both fetch. That wastes a request; it cannot corrupt the
+    cache or return anything stale.
+    """
+    if ttl <= 0:
+        return loader()
+
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit is not None and now - hit[0] < ttl:
+            return hit[1]
+
+    value = loader()
+    with _cache_lock:
+        _cache[key] = (time.monotonic(), value)
+    return value
+
+
+def _ttl(use_cache: bool) -> float:
+    return CACHE_TTL_SECONDS if use_cache else 0.0
+
+
+def clear_cache() -> None:
+    """Drop every cached response. Call after anything that should see fresh data."""
+    with _cache_lock:
+        _cache.clear()
+
+
+def cache_info() -> dict:
+    """Entry count and keys, for diagnostics and tests."""
+    with _cache_lock:
+        return {"entries": len(_cache), "keys": sorted(str(k) for k in _cache)}
+
 
 _client = None
 
@@ -57,30 +121,41 @@ def get_hero_rank_stats(
     rank: str = "all",
     sort_field: str = "win_rate",
     size: int = 20,
+    use_cache: bool = True,
 ) -> list[dict]:
-    
-    client = get_client()
-    try:
-        response = client.heroes.heroes_rank(
-            days=days, rank=rank, sort_field=sort_field,
-            sort_order="desc", size=size, index=1,
-        )
-    except RoneArenaError as e:
-        raise RuntimeError(f"Failed to fetch hero rank stats: {e}") from e
+    # `use_cache=False` matters here specifically: meta_watcher.take_snapshot()
+    # calls this, and its whole job is recording what the stats are RIGHT NOW.
+    # A cached snapshot would silently bake in hour-old numbers, and because
+    # drift is diffed across days that corruption would never be visible.
+    def _fetch() -> list[dict]:
+        client = get_client()
+        try:
+            response = client.heroes.heroes_rank(
+                days=days, rank=rank, sort_field=sort_field,
+                sort_order="desc", size=size, index=1,
+            )
+        except RoneArenaError as e:
+            raise RuntimeError(f"Failed to fetch hero rank stats: {e}") from e
 
-    records = response.get("data", {}).get("records", [])
-    stats = []
-    for record in records:
-        data = record.get("data", {})
-        hero_info = data.get("main_hero", {}).get("data", {})
-        stats.append({
-            "hero_id": data.get("main_heroid"),
-            "name": hero_info.get("name"),
-            "pick_rate": data.get("main_hero_appearance_rate"),
-            "ban_rate": data.get("main_hero_ban_rate"),
-            "win_rate": data.get("main_hero_win_rate"),
-        })
-    return stats
+        records = response.get("data", {}).get("records", [])
+        stats = []
+        for record in records:
+            data = record.get("data", {})
+            hero_info = data.get("main_hero", {}).get("data", {})
+            stats.append({
+                "hero_id": data.get("main_heroid"),
+                "name": hero_info.get("name"),
+                "pick_rate": data.get("main_hero_appearance_rate"),
+                "ban_rate": data.get("main_hero_ban_rate"),
+                "win_rate": data.get("main_hero_win_rate"),
+            })
+        return stats
+
+    cached = _cached_call(("hero_rank_stats", days, rank, sort_field, size),
+                          _ttl(use_cache), _fetch)
+    # Hand back copies: callers get plain dicts they may reasonably mutate,
+    # and a mutation reaching the cached list would poison every later read.
+    return [dict(row) for row in cached]
 
 
 _hero_id_to_name_cache: dict[int, str] | None = None
@@ -122,43 +197,55 @@ def _parse_hero_relation_response(records: list[dict], sub_hero_field: str) -> l
 
 def get_hero_counters(
     hero_identifier: str, rank: str = "all", size: int = 10,
-    days: int = DEFAULT_WINDOW_DAYS,
+    days: int = DEFAULT_WINDOW_DAYS, use_cache: bool = True,
 ) -> list[dict]:
+    # Keyed per hero, which is where the saving is: during a live draft the
+    # enemy list grows one pick at a time, so every request after the first
+    # re-asks about heroes already fetched.
+    def _fetch() -> list[dict]:
+        client = get_client()
+        try:
+            response = client.heroes.hero_counters(
+                hero_identifier=hero_identifier, days=days, rank=rank, size=size, index=1,
+            )
+        except RoneArenaError as e:
+            raise RuntimeError(
+                f"Failed to fetch counters for '{hero_identifier}': {e}"
+            ) from e
 
-    client = get_client()
-    try:
-        response = client.heroes.hero_counters(
-            hero_identifier=hero_identifier, days=days, rank=rank, size=size, index=1,
-        )
-    except RoneArenaError as e:
-        raise RuntimeError(
-            f"Failed to fetch counters for '{hero_identifier}': {e}"
-        ) from e
+        records = response.get("data", {}).get("records", [])
+        return _parse_hero_relation_response(records, "sub_hero_last")
 
-    records = response.get("data", {}).get("records", [])
-    return _parse_hero_relation_response(records, "sub_hero_last")
+    cached = _cached_call(("hero_counters", str(hero_identifier).lower(), rank, size, days),
+                          _ttl(use_cache), _fetch)
+    return [dict(row) for row in cached]
 
 
 def get_hero_compatibility(
     hero_identifier: str, rank: str = "all", size: int = 10,
-    days: int = DEFAULT_WINDOW_DAYS,
+    days: int = DEFAULT_WINDOW_DAYS, use_cache: bool = True,
 ) -> list[dict]:
     # `days` is accepted by this endpoint but was never passed, leaving it
     # on its 1-day default — see DEFAULT_WINDOW_DAYS. Verified supported:
     # at days=7 every returned hero_win_rate matches heroes_rank at days=7
     # exactly (Miya and Gusion, 10/10 heroes).
-    client = get_client()
-    try:
-        response = client.heroes.hero_compatibility(
-            hero_identifier=hero_identifier, days=days, rank=rank, size=size, index=1,
-        )
-    except RoneArenaError as e:
-        raise RuntimeError(
-            f"Failed to fetch compatibility for '{hero_identifier}': {e}"
-        ) from e
+    def _fetch() -> list[dict]:
+        client = get_client()
+        try:
+            response = client.heroes.hero_compatibility(
+                hero_identifier=hero_identifier, days=days, rank=rank, size=size, index=1,
+            )
+        except RoneArenaError as e:
+            raise RuntimeError(
+                f"Failed to fetch compatibility for '{hero_identifier}': {e}"
+            ) from e
 
-    records = response.get("data", {}).get("records", [])
-    return _parse_hero_relation_response(records, "sub_hero")
+        records = response.get("data", {}).get("records", [])
+        return _parse_hero_relation_response(records, "sub_hero")
+
+    cached = _cached_call(("hero_compatibility", str(hero_identifier).lower(), rank, size, days),
+                          _ttl(use_cache), _fetch)
+    return [dict(row) for row in cached]
 
 
 def get_recommended_guides(size: int = 20) -> list[dict]:
@@ -173,30 +260,35 @@ def get_recommended_guides(size: int = 20) -> list[dict]:
     return records
 
 
-def get_heroes_by_lane(lane: str, size: int = 200) -> list[dict]:
-   
-    client = get_client()
-    try:
-        response = client.heroes.heroes_positions(lane=[lane], size=size, index=1)
-    except AttributeError as e:
-        raise RuntimeError(
-            f"Guessed SDK method name 'heroes_positions' doesn't exist: {e}. "
-            f"Run this file's __main__ block to see the real method list "
-            f"under client.heroes and update this function accordingly."
-        ) from e
-    except RoneArenaError as e:
-        raise RuntimeError(f"Failed to fetch heroes for lane '{lane}': {e}") from e
+def get_heroes_by_lane(lane: str, size: int = 200, use_cache: bool = True) -> list[dict]:
+    # The safest thing here to cache: only five lanes exist and a roster
+    # changes on patches, not between drafts.
+    def _fetch() -> list[dict]:
+        client = get_client()
+        try:
+            response = client.heroes.heroes_positions(lane=[lane], size=size, index=1)
+        except AttributeError as e:
+            raise RuntimeError(
+                f"Guessed SDK method name 'heroes_positions' doesn't exist: {e}. "
+                f"Run this file's __main__ block to see the real method list "
+                f"under client.heroes and update this function accordingly."
+            ) from e
+        except RoneArenaError as e:
+            raise RuntimeError(f"Failed to fetch heroes for lane '{lane}': {e}") from e
 
-    records = response.get("data", {}).get("records", [])
-    heroes = []
-    for record in records:
-        data = record.get("data", {})
-        hero_info = data.get("hero", {}).get("data", {})
-        heroes.append({
-            "hero_id": data.get("hero_id"),
-            "name": hero_info.get("name"),
-        })
-    return heroes
+        records = response.get("data", {}).get("records", [])
+        heroes = []
+        for record in records:
+            data = record.get("data", {})
+            hero_info = data.get("hero", {}).get("data", {})
+            heroes.append({
+                "hero_id": data.get("hero_id"),
+                "name": hero_info.get("name"),
+            })
+        return heroes
+
+    cached = _cached_call(("heroes_by_lane", lane, size), _ttl(use_cache), _fetch)
+    return [dict(row) for row in cached]
 
 
 if __name__ == "__main__":

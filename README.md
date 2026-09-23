@@ -20,7 +20,13 @@ inventing matchup claims that weren't in its context.
 
 Live, structured stats (win rates, counters, compatibility) are
 fetched via direct API tool-calls at query time — they change too
-often and are too precise to embed and risk retrieving stale.
+often and are too precise to embed and risk retrieving stale. Those
+responses are cached per hero for an hour (`RONE_CACHE_TTL_SECONDS`),
+which matters during a real draft: picks accumulate, so each request
+mostly re-asks about heroes already fetched. Over a four-request
+draft that's 23 API calls down to 8, and the last and slowest request
+drops from 8 calls to 1. Snapshots and the "Refresh live intel"
+button bypass the cache, since both exist to see current data.
 Narrative strategy content (drafting philosophy, hero-specific
 reasoning) goes through RAG instead, and is manually curated by you
 rather than scraped, since your own judgment is more valuable RAG
