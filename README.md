@@ -2,10 +2,21 @@
 
 An agentic draft assistant for Mobile Legends: Bang Bang — combines
 live hero stats (Rone Arena API) with RAG over your own curated
-strategy notes, orchestrated with LangGraph. Runs fully locally, no
-paid APIs.
+strategy notes, orchestrated with LangGraph. Everything runs locally
+except the final ranking call, which goes to Jev (a hosted decision
+model) at roughly $0.0002 per recommendation.
 
 ## Why it's built this way
+
+The draft agent doesn't generate its recommendation — it ranks. Live
+stats are cross-referenced against the lane roster in plain Python to
+build a candidate list, each candidate is scored for note relevance,
+and Jev assigns a tier against a fixed rubric. The rationale you read
+is templated from those same numbers, so it can only state things that
+are true by construction. An earlier version had a local 3B model
+write the picks and the prose, guarded by a JSON self-repair loop and
+post-hoc constraint filters; it was slower, and it was caught
+inventing matchup claims that weren't in its context.
 
 Live, structured stats (win rates, counters, compatibility) are
 fetched via direct API tool-calls at query time — they change too
@@ -20,9 +31,14 @@ snapshotting stats over time.
 ## Prerequisites
 
 - Python 3.11+
-- [Ollama](https://ollama.com), with `qwen2.5:3b` pulled and running
-  locally (`ollama pull qwen2.5:3b`)
+- An `OPEN_JEV_KEY` in `.env` — the draft agent ranks candidates with
+  [Jev](https://api.openjev.sh), a hosted decision model. Calls cost
+  roughly $0.0002 each.
 - (Optional, for scheduled Meta-Watcher runs) Docker Desktop
+
+Ollama is no longer required. An earlier version generated
+recommendations with a local `qwen2.5:3b`; that model was replaced by
+Jev and nothing in the pipeline imports it any more.
 
 ## Quick start
 
@@ -35,21 +51,21 @@ source venv/bin/activate        # macOS/Linux
 # venv\Scripts\activate         # Windows
 
 pip install -r requirements.txt
-cp .env.example .env            # no API key needed, defaults work out of the box
+cp .env.example .env            # then add your OPEN_JEV_KEY
 
 python -m src.rag.ingest        # index the sample strategy notes
 python -m src.web.server --open # starts the app and opens http://localhost:8600
 ```
 
-Make sure Ollama is running first (the header shows whether it's
-reachable). On the **Draft** view, add the heroes already picked and
+On the **Draft** view, add the heroes already picked and
 banned, choose the lane you need, and request a ranked
 recommendation. Each pick shows the live-data or note evidence
-behind it, or says plainly when it rests on model knowledge alone,
-and "What the agent saw" exposes the stats, retrieved notes and raw
-model output. The **Notebook** view is where you write, edit and
-delete strategy notes and rebuild the knowledge base. The app only
-listens on localhost.
+behind it, and "What the agent saw" exposes the live stats, the
+cumulative counter/synergy table, the retrieved notes and Jev's raw
+response. Each pick carries a tier (Priority / Solid / Marginal /
+Fallback) and the confidence behind it. The **Notebook** view is
+where you write, edit and delete strategy notes and rebuild the
+knowledge base. The app only listens on localhost.
 
 **Windows tip:** double-click `run_dashboard.bat` instead of using the
 terminal each time — see "Desktop launcher" below.
@@ -60,7 +76,9 @@ terminal each time — see "Desktop launcher" below.
 |---|---|
 | `src/api_client/rone_arena_client.py` | Live stats (win rates, counters, compatibility) via direct API calls |
 | `src/rag/` | Curated strategy notes → embeddings → Chroma vector store |
-| `src/agents/draft_agent.py` | LangGraph agent: gather stats → retrieve notes → generate → validate (self-repair loop on invalid JSON) |
+| `src/agents/draft_agent.py` | LangGraph agent: gather stats → retrieve notes → score candidates with Jev |
+| `src/agents/jev_client.py` | Jev adapter: builds the candidate state + rubric, one batched request, templates the rationale |
+| `src/rag/scoring.py` | Note-relevance scoring (Noisy-OR) feeding each candidate's `rag_score` |
 | `src/agents/meta_watcher.py` | Deterministic snapshot + drift-detection agent (no LLM needed) |
 | `src/web/` | The app: Flask JSON API (`server.py`) wrapping the agents/RAG unchanged, plus the static frontend in `static/` (HTML, Tailwind CSS, vanilla JS modules) |
 | `data/raw/` | Your strategy notes (general + per-hero) |
@@ -83,33 +101,41 @@ knowledge base has fallen out of step with them.
 
 ## Evaluating the Draft Agent
 
-Since the Draft Agent's LLM output is non-deterministic, "does it
-work" needs to be measured across repeated runs, not spot-checked
-once. `src/eval/reliability_eval.py` measures three concrete things
-against a fixed set of golden draft scenarios (`src/eval/scenarios.py`):
+Jev's output is near-deterministic but not exactly so, and a rubric
+can be perfectly stable while still being useless — so "does it work"
+is measured across repeated runs against a fixed set of golden draft
+scenarios. `src/eval/jev_eval.py` measures three things:
 
-1. **JSON validity rate** — how often qwen2.5:3b produces valid
-   structured output on the first try vs. needing the self-repair
-   loop vs. failing even after retries.
-2. **Repair-loop rescue rate** — of the runs that failed on the first
-   try, how many did the repair loop actually save.
-3. **Raw constraint-violation rate** — how often the LLM recommends
-   an already-picked/banned or lane-ineligible hero *before* the
-   deterministic filters remove it, i.e. how much real work those
-   filters are doing.
+1. **Stability** — given byte-identical state, does a repeat run
+   return the same tiers in the same order? Reported with the largest
+   score drift any candidate showed.
+2. **Separation** — does the rubric discriminate, or collapse every
+   candidate into one tier? A stable rubric that rates everything
+   "Solid" tells you nothing.
+3. **Calibration** — the confidence spread. Descriptive only: there's
+   no ground truth here to score against.
 
 ```bash
-python -m src.eval.reliability_eval                    # all scenarios, 2 repeats each
-python -m src.eval.reliability_eval --repeats 5         # more repeats, tighter estimate
-python -m src.eval.reliability_eval --scenario early_jungle
+python -m src.eval.jev_eval
 ```
 
-Each run is a real local LLM call, so this is slow (minutes, not
-seconds) — progress prints per-run.
+Live stats are fetched once per scenario and reused across repeats, so
+upstream API drift can't masquerade as model instability. Each run is
+a real API call (~12 per invocation, a fraction of a cent), so it
+never runs automatically.
+
+`src/eval/reliability_eval.py` is **superseded and should not be run**.
+It measured JSON-validity, repair-loop rescue rate and raw constraint
+violations — all of which are now true by construction, since Jev
+returns typed output and is handed a candidate list that has already
+been filtered for lane eligibility and used heroes. It still executes,
+which is the trap: it would report zero failures and read as a perfect
+score rather than a missing measurement. It's kept for the historical
+numbers in `data/eval_results/`.
 
 `src/eval/retrieval_eval.py` separately evaluates RAG retrieval
-quality — independent of LLM generation, since a bad recommendation
-could be the LLM's fault or the retriever's fault, and this tells you
+quality — independent of ranking, since a bad recommendation could be
+the retriever's fault rather than the rubric's, and this tells you
 which. It queries the vector store directly against a hand-labeled
 set of query → expected-note pairs (`src/eval/retrieval_golden_set.py`),
 measuring hit@k and Mean Reciprocal Rank. No LLM calls, so it's fast
@@ -134,9 +160,8 @@ in your browser — no terminal navigation needed. Right-click it →
 **Send to** → **Desktop (create shortcut)** for a normal desktop
 icon. A console window stays open behind the browser (closing it
 stops the app), and launching it again while it's running just
-reopens the existing instance. Ollama still needs to be running
-separately. The port defaults to 8600; set `DRAFT_COPILOT_PORT` to
-change it.
+reopens the existing instance. The port defaults to 8600; set
+`DRAFT_COPILOT_PORT` to change it.
 
 ## Frontend styling
 
@@ -167,10 +192,6 @@ The command snapshots current hero stats to `data/snapshots/`, then
 diffs against the previous snapshot to flag heroes whose win/pick/ban
 rate moved by 2+ percentage points. Every run, manual or scheduled,
 is logged to `data/snapshots/drift_log.txt`.
-
-The **Live intel** rail on the app's Draft view can also start and
-stop the local wrapper the n8n schedule calls, and shows the
-snapshot count and the biggest recent drift.
 
 ## Optional: scheduling Meta-Watcher with n8n
 

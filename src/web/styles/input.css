@@ -407,6 +407,27 @@
   .lead .meter-pct { color: var(--color-gold-hi); font-size: var(--text-xl); }
   .meter-label { font: 600 var(--text-xs)/1 var(--font-sans); letter-spacing: .07em; text-transform: uppercase; color: var(--color-ink-3); }
 
+  /* Jev verdict: an ordered tier plus the confidence behind it. Replaces the
+     0-1 meter, whose bare number read as a win probability. Gold is reserved
+     for the top tier so the pick/ban screen's hierarchy still holds. */
+  .verdict { display: inline-flex; align-items: center; gap: 10px; }
+  .tier-badge {
+    --cut: 6px; --edge: var(--color-steel); --bw: 1px;
+    padding: 5px 11px; font: 700 var(--text-xs)/1 var(--font-sans);
+    letter-spacing: .08em; text-transform: uppercase; color: var(--color-ink-2);
+    background: var(--color-stage-800); white-space: nowrap;
+  }
+  .tier-badge[data-tier="priority"] { --edge: var(--color-gold-lo); color: var(--color-gold-hi); background: var(--color-gold-deep); }
+  .tier-badge[data-tier="solid"]    { --edge: var(--color-steel-hi); color: var(--color-ink); }
+  .tier-badge[data-tier="marginal"] { color: var(--color-ink-3); }
+  .tier-badge[data-tier="fallback"] { color: var(--color-ink-3); opacity: .82; }
+  .tier-conf {
+    font: 700 var(--text-md)/1 var(--font-sans); color: var(--color-ink-2);
+    font-variant-numeric: tabular-nums; min-width: 3.2ch;
+  }
+  .lead .tier-badge { font-size: var(--text-sm); padding: 7px 14px; }
+  .lead .tier-conf { color: var(--color-gold-hi); font-size: var(--text-xl); }
+
   /* lock-in: the one authored moment */
   .lock-in .portrait { animation: lock-in 260ms cubic-bezier(.16, 1, .3, 1) both; }
   @keyframes lock-in { from { transform: perspective(500px) rotateY(88deg) scale(.9); } to { transform: perspective(500px) rotateY(0) scale(1); } }
@@ -460,16 +481,6 @@
   .intel-row .r-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .intel-row .r-sub { display: block; font-size: var(--text-xs); color: var(--color-ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
   .intel-row .r-wr { font: 700 var(--text-md)/1 var(--font-sans); color: var(--color-ink); font-variant-numeric: tabular-nums; }
-  .watch-block { padding-top: 16px; border-top: 1px solid var(--color-edge); }
-  .watch-state { display: flex; align-items: center; gap: 10px; margin: 10px 0 12px; font-weight: 600; }
-  .watch-meta { font-size: var(--text-sm); color: var(--color-ink-3); margin: 10px 0 0; line-height: 1.5; }
-  .moves { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-  .moves li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: var(--text-sm); }
-  .moves .icon { width: 14px; height: 14px; }
-  .moves .up { color: var(--color-ok); }
-  .moves .down { color: var(--color-danger); }
-  .moves .m-what { color: var(--color-ink-3); }
-  .moves .m-delta { font-variant-numeric: tabular-nums; font-weight: 600; }
 
   /* ---- notebook ---- */
   .nb-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }

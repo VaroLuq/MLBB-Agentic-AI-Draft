@@ -53,7 +53,4 @@ export const api = {
   deleteNote: (id) => request("DELETE", `/api/notes/${notePath(id)}`),
   rebuildKb: () => request("POST", "/api/knowledge-base/rebuild"),
 
-  watcher: () => request("GET", "/api/meta-watcher"),
-  startWatcher: () => request("POST", "/api/meta-watcher/start"),
-  stopWatcher: () => request("POST", "/api/meta-watcher/stop"),
 };

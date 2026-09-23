@@ -165,14 +165,11 @@ def _hero_list(value, field: str) -> list[str]:
     return cleaned
 
 
-def _filtered_out(result: dict) -> list[dict]:
-    violations = result.get("constraint_violations") or {}
-    reasons: dict[str, str] = {}
-    for hero in violations.get("used_hero_violations", []):
-        reasons[hero] = "Already picked or banned"
-    for hero in violations.get("lane_violations", []):
-        reasons.setdefault(hero, f"Not eligible for the {result.get('role_needed')} lane")
-    return [{"hero": hero, "reason": reason} for hero, reason in reasons.items()]
+# _filtered_out() was removed alongside the LLM. It reported heroes that the
+# model had recommended and the deterministic filters then stripped; with Jev
+# scoring a candidate list that is already lane-filtered and free of used
+# heroes, nothing is ever stripped after the fact, so the field had no content
+# to carry.
 
 
 @app.post("/api/recommend")
@@ -226,10 +223,8 @@ def recommend():
 
     return jsonify({
         "recommendation": parsed,
-        "parse_error": result.get("parse_error"),
-        "raw_llm_output": result.get("raw_llm_output"),
-        "repair_attempts": result.get("repair_attempts", 0),
-        "filtered_out": _filtered_out(result),
+        "jev_error": result.get("jev_error"),
+        "jev_raw": result.get("jev_raw"),
         "live_stats_summary": live,
         "lane_filtered_stats": result.get("lane_filtered_stats_text"),
         "lane_filtered_aggregate": result.get("lane_filtered_aggregate") or [],

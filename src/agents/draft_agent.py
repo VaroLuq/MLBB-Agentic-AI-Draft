@@ -1,9 +1,7 @@
-import json
 from typing import TypedDict
-from pydantic import BaseModel, Field, ValidationError
 from langgraph.graph import StateGraph, END
 
-from src.agents.llm import get_llm
+from src.agents import jev_client
 from src.api_client.rone_arena_client import (
     get_hero_rank_stats,
     get_hero_counters,
@@ -11,22 +9,9 @@ from src.api_client.rone_arena_client import (
     get_heroes_by_lane,
 )
 from src.rag.vectorstore import get_vectorstore
+from src.rag.scoring import aggregate_rag_scores, mentions_hero
 
-MAX_REPAIR_ATTEMPTS = 2
 VALID_LANES = {"exp", "mid", "roam", "jungle", "gold"}
-
-
-# --- Structured output schema ---
-
-class PickRecommendation(BaseModel):
-    hero: str
-    priority_score: float = Field(ge=0, le=1)
-    rationale: str
-
-
-class DraftRecommendation(BaseModel):
-    recommendations: list[PickRecommendation]
-    summary: str
 
 
 # --- Graph state ---
@@ -42,12 +27,9 @@ class DraftState(TypedDict, total=False):
     lane_roster_text: str | None
     lane_filtered_stats_text: str | None
     lane_filtered_aggregate: list[dict]
-    raw_llm_output: str
     parsed_recommendation: dict | None
-    parse_error: str | None
-    repair_attempts: int
-    raw_recommended_heroes: list[str]
-    constraint_violations: dict
+    jev_raw: dict | None
+    jev_error: str | None
 
 
 # --- Nodes ---
@@ -121,6 +103,24 @@ def gather_live_stats(state: DraftState) -> DraftState:
     # bullets otherwise, and nothing adds them up. Keyed by lowercased
     # name, matching how the lane filter compares names.
     aggregate: dict[str, dict] = {}
+    # Heroes already picked or banned are excluded from the aggregate, not
+    # just from the final recommendations. parse_output filters used heroes
+    # out of the LLM's answer after the fact, which is enough while an LLM
+    # is choosing, but the aggregate is a candidate list in its own right —
+    # anything consuming it directly (the Jev evaluation) would otherwise be
+    # handed banned heroes to score. Verified before this guard existed:
+    # banning Esmeralda still left her as the sole candidate against
+    # Lapu-Lapu. Deliberately NOT applied to lane_filtered_stats_text below,
+    # which feeds the prompt — changing what the model sees is a behaviour
+    # change that needs its own eval run.
+    used_heroes = {
+        h.lower()
+        for h in (
+            state.get("ally_picks", [])
+            + state.get("enemy_picks", [])
+            + state.get("banned_heroes", [])
+        )
+    }
     # win_rate is whichever source reaches the hero first, which is safe
     # only because both endpoints now run on the same trailing window
     # (rone_arena_client.DEFAULT_WINDOW_DAYS). They used to disagree —
@@ -132,6 +132,8 @@ def gather_live_stats(state: DraftState) -> DraftState:
         if not name:
             return
         if valid_lane_lower is not None and name.lower() not in valid_lane_lower:
+            return
+        if name.lower() in used_heroes:
             return
         entry = aggregate.setdefault(name.lower(), {
             "name": name,
@@ -230,222 +232,137 @@ def retrieve_notes(state: DraftState) -> DraftState:
     query_parts += state.get("ally_picks", [])
     query = "Draft advice for: " + ", ".join(p for p in query_parts if p)
 
+    # similarity_search_with_relevance_scores rather than the plain
+    # retriever: same documents in the same order, but it also hands back
+    # the 0-1 relevance the retriever discards, which _attach_rag_scores
+    # needs. `notes_text` is byte-identical to what the retriever produced,
+    # so the prompt the model sees is unchanged.
+    scored = []
     try:
         vectorstore = get_vectorstore()
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
-        docs = retriever.invoke(query)
+        scored = vectorstore.similarity_search_with_relevance_scores(query, k=4)
         notes_text = "\n\n".join(
             f"[{d.metadata.get('hero_name', 'general')}] {d.page_content}"
-            for d in docs
+            for d, _ in scored
         ) or "(no relevant notes found)"
     except Exception as e:
         notes_text = f"(Could not retrieve notes: {e})"
 
     state["retrieved_notes"] = notes_text
+    _attach_rag_scores(state, scored)
     return state
 
 
-RECOMMENDATION_PROMPT = """You are a Mobile Legends: Bang Bang draft strategy assistant.
+def _attach_rag_scores(state: DraftState, scored: list) -> None:
+    """Add `rag_score` + `notes` to each row of `lane_filtered_aggregate`.
 
-Draft state:
-- Allies picked: {ally_picks}
-- Enemies picked: {enemy_picks}
-- Banned heroes: {banned_heroes}
-- Role needed: {role_needed}
+    Runs here rather than in gather_live_stats purely because of node order:
+    the aggregate is built before retrieval happens, so this is the first
+    point where both exist. Costs no extra query — it reuses the scores from
+    the single scenario retrieval above.
 
-Live stats context:
-{live_stats_summary}
+    Scoring against the scenario query (not a per-hero one) is what makes
+    rag_score draft-conditional for free: the query text contains the lane
+    and the picks, so a note only scores well when it is relevant to THIS
+    draft. Measured on the Esmeralda/Lapu-Lapu note: 0.409 when Lapu-Lapu is
+    an enemy, 0.173 when he is not.
+    """
+    aggregate = state.get("lane_filtered_aggregate") or []
+    if not aggregate:
+        return
 
-Strategic notes (curated by the user — weigh these heavily, they reflect deliberate strategic judgment):
-{retrieved_notes}
-{lane_filtered_stats_section}
-{lane_constraint_section}
-Respond with ONLY valid JSON matching this exact schema, no other text, no markdown code fences:
-{{
-  "recommendations": [
-    {{"hero": "<hero name>", "priority_score": <float between 0 and 1>, "rationale": "<one sentence reason>"}}
-  ],
-  "summary": "<one or two sentence overall reasoning>"
-}}
-
-Provide 3 to 5 ranked recommendations, highest priority first. Do not recommend a hero that is already picked or banned.
-"""
-
-LANE_FILTERED_STATS_TEMPLATE = """
-HIGH-SIGNAL LIVE DATA FOR THE '{role_needed}' LANE:
-These heroes are BOTH statistically relevant (from the live counter/compatibility data above) AND valid picks for the '{role_needed}' lane. Strongly prefer recommending from here over general knowledge, unless the strategic notes above give good reason not to:
-{lane_filtered_stats_text}
-"""
-
-LANE_CONSTRAINT_TEMPLATE = """
-ELIGIBLE HEROES FOR THE '{role_needed}' LANE — READ CAREFULLY:
-You MUST pick ONLY from this exact list. Each name below is one complete hero name — some contain the word "and" as part of the name itself (e.g. "Popol and Kupa" is ONE hero, not two); do not split, merge, or invent names.
-{lane_roster_text}
-Any recommendation for a hero not in this exact list is INVALID.
-"""
-
-
-def generate_recommendation(state: DraftState) -> DraftState:
-    llm = get_llm()
-
-    lane_roster_text = state.get("lane_roster_text")
-    lane_constraint_section = (
-        LANE_CONSTRAINT_TEMPLATE.format(
-            role_needed=state.get("role_needed"),
-            lane_roster_text=lane_roster_text,
-        )
-        if lane_roster_text
-        else ""
-    )
-
-    lane_filtered_stats_text = state.get("lane_filtered_stats_text")
-    lane_filtered_stats_section = (
-        LANE_FILTERED_STATS_TEMPLATE.format(
-            role_needed=state.get("role_needed"),
-            lane_filtered_stats_text=lane_filtered_stats_text,
-        )
-        if lane_filtered_stats_text
-        else ""
-    )
-
-    prompt = RECOMMENDATION_PROMPT.format(
-        ally_picks=", ".join(state.get("ally_picks", [])) or "none yet",
-        enemy_picks=", ".join(state.get("enemy_picks", [])) or "none yet",
-        banned_heroes=", ".join(state.get("banned_heroes", [])) or "none",
-        role_needed=state.get("role_needed") or "any",
-        live_stats_summary=state.get("live_stats_summary", ""),
-        retrieved_notes=state.get("retrieved_notes", ""),
-        lane_filtered_stats_section=lane_filtered_stats_section,
-        lane_constraint_section=lane_constraint_section,
-    )
-    response = llm.invoke(prompt)
-    state["raw_llm_output"] = response.content
-    return state
-
-
-def _strip_code_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = lines[1:] if lines[0].startswith("```") else lines
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines)
-    return text.strip()
-
-
-def parse_output(state: DraftState) -> DraftState:
-   
-    raw = state.get("raw_llm_output", "")
-    cleaned = _strip_code_fences(raw)
-
-    try:
-        parsed = DraftRecommendation.model_validate_json(cleaned)
-
-        # Eval instrumentation only, below: record what the LLM raw
-        # output actually contained and which constraint each
-        # violating hero broke, BEFORE filtering removes them. This
-        # doesn't change behavior — the app never reads these fields —
-        # it just makes the deterministic filter's actual workload
-        # measurable (see src/eval/), instead of the violations
-        # silently vanishing with no record they ever happened.
-        used_heroes = {
-            h.lower() for h in (
-                state.get("ally_picks", [])
-                + state.get("enemy_picks", [])
-                + state.get("banned_heroes", [])
-            )
-        }
-        valid_lane_heroes = state.get("valid_lane_heroes")
-        valid_lane_lower = (
-            {h.lower() for h in valid_lane_heroes} if valid_lane_heroes else None
-        )
-        state["raw_recommended_heroes"] = [r.hero for r in parsed.recommendations]
-        state["constraint_violations"] = {
-            "used_hero_violations": [
-                r.hero for r in parsed.recommendations if r.hero.lower() in used_heroes
-            ],
-            "lane_violations": [
-                r.hero for r in parsed.recommendations
-                if valid_lane_lower is not None and r.hero.lower() not in valid_lane_lower
-            ],
-        }
-
-        filtered_recs = [
-            r for r in parsed.recommendations if r.hero.lower() not in used_heroes
+    for row in aggregate:
+        hero = row.get("name", "")
+        # A note counts for a hero if it is tagged with them or names them;
+        # the second half is the valuable case (see mentions_hero).
+        matched = [
+            (str(doc.metadata.get("hero_name", "general")), score, doc.page_content)
+            for doc, score in scored
+            if str(doc.metadata.get("hero_name", "")).lower() == hero.lower()
+            or mentions_hero(doc.page_content, hero)
+        ]
+        row["rag_score"] = aggregate_rag_scores([s for _, s, _ in matched])
+        # Every matched note is kept, including ones that fell below the
+        # threshold, so a 0.0 is explainable rather than mysterious. `text`
+        # is carried because the Jev state includes the note prose itself —
+        # rag_score says how relevant a note is, the text says what it
+        # actually advises, and only the latter survives dropping the LLM.
+        row["notes"] = [
+            {"hero_name": tag, "relevance": round(s, 4), "text": text}
+            for tag, s, text in matched
         ]
 
-        # Deterministic lane enforcement: if we successfully fetched a
-        # lane roster, drop any recommendation for a hero not on it.
-        # Only enforce when we actually have the data — an API failure
-        # shouldn't silently zero out all recommendations.
-        if valid_lane_heroes:
-            filtered_recs = [
-                r for r in filtered_recs if r.hero.lower() in valid_lane_lower
-            ]
+    state["lane_filtered_aggregate"] = aggregate
 
-        state["parsed_recommendation"] = {
-            "recommendations": [r.model_dump() for r in filtered_recs],
-            "summary": parsed.summary,
+
+def evaluate_candidates(state: DraftState) -> DraftState:
+    """Score every candidate with Jev, in one batched request.
+
+    Replaces the generate -> parse -> repair loop that ran against a local
+    3B model. That loop existed to coerce a generative model into emitting
+    valid JSON and to catch it recommending picked, banned or wrong-lane
+    heroes. None of it applies here: Jev returns typed output by
+    construction, and the candidate list it is handed was already filtered
+    for lane eligibility and used heroes upstream in gather_live_stats.
+    """
+    result = jev_client.evaluate_candidates(state)
+    state["jev_raw"] = result.get("raw")
+    state["jev_error"] = result.get("error")
+
+    rows = result.get("rows") or []
+    if not rows:
+        state["parsed_recommendation"] = None
+        return state
+
+    # jev_client already sorted by the continuous score, best first.
+    recommendations = [
+        {
+            "hero": row["hero"],
+            "tier": row["tier"],
+            "tier_index": row["tier_index"],
+            "score": row["score"],
+            "confidence": row["confidence"],
+            "probabilities": row["probabilities"],
+            "rationale": jev_client.describe_candidate(
+                _aggregate_row(state, row["hero"])
+            ),
         }
-        state["parse_error"] = None
-
-    except (ValidationError, json.JSONDecodeError) as e:
-        state["parse_error"] = str(e)
-        state["repair_attempts"] = state.get("repair_attempts", 0) + 1
-
+        for row in rows
+    ]
+    state["parsed_recommendation"] = {
+        "recommendations": recommendations,
+        "summary": jev_client.summarise(recommendations, state.get("role_needed")),
+    }
     return state
 
 
-REPAIR_PROMPT = """The following was supposed to be valid JSON but failed to parse.
-
-Error: {error}
-
-Original output:
-{raw_output}
-
-Return ONLY the corrected, valid JSON matching the required schema. No other text, no markdown fences.
-"""
-
-
-def repair_output(state: DraftState) -> DraftState:
-    llm = get_llm()
-    prompt = REPAIR_PROMPT.format(
-        error=state.get("parse_error", "unknown error"),
-        raw_output=state.get("raw_llm_output", ""),
-    )
-    response = llm.invoke(prompt)
-    state["raw_llm_output"] = response.content
-    return state
-
-
-def should_retry(state: DraftState) -> str:
-    if state.get("parsed_recommendation") is not None:
-        return "end"
-    if state.get("repair_attempts", 0) >= MAX_REPAIR_ATTEMPTS:
-        return "end"  # give up; caller sees parse_error and raw_llm_output
-    return "repair"
+def _aggregate_row(state: DraftState, hero: str) -> dict:
+    for row in state.get("lane_filtered_aggregate") or []:
+        if row.get("name") == hero:
+            return row
+    return {}
 
 
 # --- Graph assembly ---
 
 def build_draft_graph():
+    """gather_live_stats -> retrieve_notes -> evaluate_candidates -> END.
+
+    Linear now that Jev replaced the local LLM. The conditional edge and the
+    parse_output <-> repair_output cycle are gone: they existed only to
+    recover from malformed JSON, and a decision model that returns typed
+    primitives cannot emit malformed JSON in the first place.
+    """
     builder = StateGraph(DraftState)
 
     builder.add_node("gather_live_stats", gather_live_stats)
     builder.add_node("retrieve_notes", retrieve_notes)
-    builder.add_node("generate_recommendation", generate_recommendation)
-    builder.add_node("parse_output", parse_output)
-    builder.add_node("repair_output", repair_output)
+    builder.add_node("evaluate_candidates", evaluate_candidates)
 
     builder.set_entry_point("gather_live_stats")
     builder.add_edge("gather_live_stats", "retrieve_notes")
-    builder.add_edge("retrieve_notes", "generate_recommendation")
-    builder.add_edge("generate_recommendation", "parse_output")
-    builder.add_conditional_edges(
-        "parse_output", should_retry, {"repair": "repair_output", "end": END}
-    )
-    builder.add_edge("repair_output", "parse_output")
+    builder.add_edge("retrieve_notes", "evaluate_candidates")
+    builder.add_edge("evaluate_candidates", END)
 
     return builder.compile()
 
@@ -462,7 +379,6 @@ def get_draft_recommendation(
         "enemy_picks": enemy_picks or [],
         "banned_heroes": banned_heroes or [],
         "role_needed": role_needed,
-        "repair_attempts": 0,
     }
     return graph.invoke(initial_state)
 
@@ -478,13 +394,14 @@ if __name__ == "__main__":
         role_needed="jungle",
     )
 
-    if result.get("parsed_recommendation"):
+    if result.get("jev_error"):
+        print("Jev evaluation failed:", result["jev_error"])
+    elif result.get("parsed_recommendation"):
         rec = result["parsed_recommendation"]
         print("Summary:", rec["summary"])
         print("\nRecommendations:")
         for r in rec["recommendations"]:
-            print(f"  {r['hero']} (score={r['priority_score']}): {r['rationale']}")
+            print(f"  {r['hero']} [{r['tier']}] score={r['score']} "
+                  f"confidence={r['confidence']}\n      {r['rationale']}")
     else:
-        print("Failed to get a valid recommendation after retries.")
-        print("Last error:", result.get("parse_error"))
-        print("Last raw output:", result.get("raw_llm_output"))
+        print("No candidates for this draft — nothing to evaluate.")

@@ -339,8 +339,10 @@ function resultView(data, justFinished) {
     wrap.append(el("div", { class: "banner banner-error bevel", role: "alert" },
       icon("alert"),
       el("div", { class: "banner-body" },
-        el("strong", { text: "The agent couldn't produce a valid recommendation." }),
-        el("p", { text: `It retried ${data.repair_attempts} time${data.repair_attempts === 1 ? "" : "s"}, but the model's output kept failing validation. That happens with small local models under load. Try again, or open the diagnostics to see what it returned.` }),
+        el("strong", { text: data.jev_error ? "The decision service could not be reached." : "No candidates to evaluate." }),
+        el("p", { text: data.jev_error
+          ? `${data.jev_error} Open the diagnostics for the full response.`
+          : "No lane-eligible hero in this draft has counter or synergy data yet. Add enemy or ally picks, or try a different lane." }),
         el("div", { class: "banner-actions" },
           el("button", { class: "btn bevel", type: "button", onclick: requestRecommendation }, icon("refresh"), "Try again")))));
     wrap.append(diagnostics(data));
@@ -348,7 +350,8 @@ function resultView(data, justFinished) {
   }
 
   const laneLabel = LANES.find((l) => l.value === data.role_needed)?.label ?? data.role_needed;
-  const attempt = data.repair_attempts === 0 ? "valid on the first try" : `repaired after ${data.repair_attempts} ${data.repair_attempts === 1 ? "retry" : "retries"}`;
+  const scored = recommendation.recommendations.length;
+  const attempt = `${scored} candidate${scored === 1 ? "" : "s"} scored`;
 
   wrap.append(
     el("div", { class: "results-head" },
@@ -357,13 +360,9 @@ function resultView(data, justFinished) {
     recommendation.summary && el("p", { class: "results-summary", text: recommendation.summary }),
   );
 
-  if (data.filtered_out.length) {
-    wrap.append(el("div", { class: "banner banner-info bevel" },
-      icon("info"),
-      el("div", { class: "banner-body" },
-        el("strong", { text: "Removed from the model's answer" }),
-        el("p", { text: data.filtered_out.map((f) => `${f.hero} (${f.reason.toLowerCase()})`).join(", ") + ". These were caught by the draft rules, not shown as picks." }))));
-  }
+  // The "removed from the model's answer" banner is gone: filtering now
+  // happens before evaluation rather than after it, so there is never a
+  // stripped pick to report.
 
   if (!recommendation.recommendations.length) {
     wrap.append(el("div", { class: "banner banner-warn bevel" }, icon("alert"),
@@ -378,15 +377,20 @@ function resultView(data, justFinished) {
   return wrap;
 }
 
-function meter(score) {
-  const filled = Math.round(score * 10);
+// Tier badge + confidence, replacing the old 0-1 "priority" meter. Jev
+// returns an ordered tier plus the probability it assigns to that tier, which
+// is a more honest thing to show than a bare number: an unlabelled score in
+// this slot was previously misread as a win probability.
+function verdict(rec) {
+  const confidence = typeof rec.confidence === "number" ? `${Math.round(rec.confidence * 100)}%` : "—";
+  const label = rec.tier ?? "Unrated";
   return el("span", {
-    class: "meter-wrap", role: "img", "aria-label": `Priority ${Math.round(score * 100)} percent`,
-    title: "The model's own ranking score for this pick. It is not a win probability.",
+    class: "verdict", role: "img",
+    "aria-label": `Rated ${label}, ${confidence} confidence`,
+    title: "Jev's tier for this pick, and how much of its probability mass sits on that tier. Not a win probability.",
   },
-    el("span", { class: "meter-label", "aria-hidden": "true", text: "Priority" }),
-    el("span", { class: "meter", "aria-hidden": "true" }, ...Array.from({ length: 10 }, (_, i) => el("i", { class: i < filled ? "on" : "" }))),
-    el("span", { class: "meter-pct num", "aria-hidden": "true", text: `${Math.round(score * 100)}%` }),
+    el("span", { class: "tier-badge bevel", dataset: { tier: label.toLowerCase() }, "aria-hidden": "true", text: label }),
+    el("span", { class: "tier-conf num", "aria-hidden": "true", text: confidence }),
   );
 }
 
@@ -402,7 +406,7 @@ function leadCard(rec, animate) {
   return el("article", { class: `lead bevel`, "aria-label": `Top pick: ${rec.hero}` },
     portrait(rec.hero, { size: 96, gold: true }),
     el("div", {},
-      el("div", { class: "lead-top" }, el("h3", { class: "lead-name", text: rec.hero }), meter(rec.priority_score)),
+      el("div", { class: "lead-top" }, el("h3", { class: "lead-name", text: rec.hero }), verdict(rec)),
       evidenceTags(rec),
       el("p", { class: "lead-rationale", text: rec.rationale })),
   );
@@ -413,7 +417,7 @@ function pickRow(rec, rank, animate) {
     el("span", { class: "rank-n", "aria-hidden": "true", text: rank }),
     portrait(rec.hero, { size: 48 }),
     el("div", { class: "pick-body" },
-      el("div", { class: "pick-top" }, el("h3", { class: "pick-name", style: "margin:0", text: rec.hero }), meter(rec.priority_score)),
+      el("div", { class: "pick-top" }, el("h3", { class: "pick-name", style: "margin:0", text: rec.hero }), verdict(rec)),
       evidenceTags(rec)),
     el("p", { class: "pick-rationale", text: rec.rationale }),
   );
@@ -432,14 +436,19 @@ function aggregateText(rows) {
   const source = (r) => [
     r.counters?.length ? `counters ${r.counters.join(", ")}` : null,
     r.synergises_with?.length ? `synergy ${r.synergises_with.join(", ")}` : null,
+    // Named so a 0.000 RAG score reads as "no note matched" rather than
+    // "the notes were judged irrelevant" — they are different failures.
+    r.notes?.length ? `notes ${r.notes.map((n) => n.hero_name).join(", ")}` : null,
   ].filter(Boolean).join(" · ");
 
   return [
     "\nCumulative impact (lane-eligible heroes, strongest first):",
-    `  ${"HERO".padEnd(width)}  ${"WIN".padStart(6)}  ${"COUNTER".padStart(8)}  ${"SYNERGY".padStart(8)}  SOURCE`,
+    `  ${"HERO".padEnd(width)}  ${"WIN".padStart(6)}  ${"COUNTER".padStart(8)}  ` +
+      `${"SYNERGY".padStart(8)}  ${"RAG".padStart(5)}  SOURCE`,
     ...rows.map((r) => `  ${r.name.padEnd(width)}  ${num(r.win_rate).padStart(6)}  ` +
       `${num(r.cumulative_counter_impact, true).padStart(8)}  ` +
-      `${num(r.cumulative_synergy_impact, true).padStart(8)}  ${source(r)}`),
+      `${num(r.cumulative_synergy_impact, true).padStart(8)}  ` +
+      `${num(r.rag_score).padStart(5)}  ${source(r)}`),
   ].join("\n");
 }
 
@@ -448,7 +457,7 @@ function diagnostics(data, forceOpen = false) {
   const tabs = [
     { id: "live", label: "Live stats", text: [data.live_stats_summary, data.lane_filtered_stats && `\nLane-filtered:\n${data.lane_filtered_stats}`, aggregateText(data.lane_filtered_aggregate)].filter(Boolean).join("\n") || "No live stats were gathered." },
     { id: "notes", label: "Notes retrieved", text: data.retrieved_notes || "No notes were retrieved." },
-    { id: "raw", label: "Model output", text: [data.parse_error && `Validation error:\n${data.parse_error}\n`, data.raw_llm_output || "No output."].filter(Boolean).join("\n") },
+    { id: "raw", label: "Jev response", text: [data.jev_error && `Error:\n${data.jev_error}\n`, data.jev_raw ? JSON.stringify(data.jev_raw, null, 2) : "No response recorded."].filter(Boolean).join("\n") },
   ];
   const active = tabs.find((t) => t.id === diagTab) || tabs[0];
 

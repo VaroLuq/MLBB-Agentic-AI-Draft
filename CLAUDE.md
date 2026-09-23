@@ -10,8 +10,19 @@ isn't lost when continuing work here.
 A Mobile Legends: Bang Bang draft copilot, built as a portfolio/CV
 project demonstrating agentic AI engineering: LangGraph orchestration,
 tool-calling vs. RAG used deliberately for different data types, and
-reliability engineering (structured output validation with a
-self-repair loop). See README.md for full phase-by-phase status.
+reliability engineering.
+
+REWRITTEN 2026-09-23: the headline demonstration used to be "structured
+output validation with a self-repair loop" around a local qwen2.5:3b.
+That model, its prompt, its JSON schema, the parse/repair cycle and the
+post-generation constraint filters have ALL been removed. The pipeline
+now ends in Jev, a third-party decision model that returns typed
+primitives, so there is no generated JSON to validate and no generated
+hero name to filter. The demonstration is now the migration itself:
+measuring that a generative model was doing a classification job badly
+and slowly, then replacing it with a classifier and re-measuring. If a
+future session finds text describing the repair loop as current
+behaviour, that text is stale — the loop is gone.
 
 ## Architecture (see README.md for the diagram-level view)
 
@@ -25,8 +36,15 @@ self-repair loop). See README.md for full phase-by-phase status.
   was tried and reworked away — see git history / earlier chat — the
   user's own drafting judgment was judged more valuable RAG content).
 - **Draft Agent** (`src/agents/draft_agent.py`) — a LangGraph state
-  machine: gather_live_stats -> retrieve_notes -> generate_recommendation
-  -> parse_output <-> repair_output (loop, max 2 retries) -> end.
+  machine. CURRENT graph (2026-09-23), linear, no conditional edges:
+  gather_live_stats -> retrieve_notes -> evaluate_candidates -> END.
+  `evaluate_candidates` calls Jev (see the Jev bullet below); it does
+  not call an LLM. The old `generate_recommendation`, `parse_output`,
+  `repair_output`, `should_retry`, `RECOMMENDATION_PROMPT`,
+  `REPAIR_PROMPT`, `_strip_code_fences` and the Pydantic
+  `DraftRecommendation`/`PickRecommendation` models were all deleted.
+  `src/agents/llm.py` still exists but NOTHING imports it — the Ollama
+  dependency is detached, not merely unused.
   `gather_live_stats` does more than fetch data: it deterministically
   cross-references `get_hero_counters()`/`get_hero_compatibility()`
   results against the fetched lane roster (`lane_filtered_stats_text`)
@@ -34,22 +52,35 @@ self-repair loop). See README.md for full phase-by-phase status.
   (via manual trace, then confirmed via repeat runs) to ignore real,
   relevant counter data it technically had in-context, since nothing
   told it to cross-reference two separately-formatted lists itself.
-  Both `lane_filtered_stats_text` and `lane_roster_text` are
-  deliberately given prominent, emphatically-worded sections late in
-  the prompt (not buried in the general stats block) — see the
-  empirical findings below for why position/framing, not just
-  presence, turned out to matter.
+  Both `lane_filtered_stats_text` and `lane_roster_text` USED to be
+  given prominent, emphatically-worded sections late in the prompt (see
+  the empirical findings below for why position/framing, not just
+  presence, turned out to matter). That prompt no longer exists.
+  `lane_filtered_stats_text` and `lane_roster_text` are still built and
+  still carried in `DraftState` — the web app's diagnostics panel reads
+  the former — but nothing consumes them as prompt text any more. The
+  cross-referencing work itself survived the migration and now feeds
+  `lane_filtered_aggregate` instead, which is the point: it was always
+  deterministic code, never prompt engineering.
+  `gather_live_stats` also excludes already-picked and banned heroes
+  from the aggregate (not just from the final answer). That guard was
+  added 2026-09-23 and is load-bearing now: `parse_output` used to strip
+  used heroes AFTER generation, and deleting it would otherwise have
+  handed Jev banned heroes to score. Verified before the fix: banning
+  Esmeralda still left her as the sole candidate against Lapu-Lapu.
+  Deliberately NOT applied to `lane_filtered_stats_text`.
 - **Cumulative counter/synergy aggregate** (2026-09-23,
   `gather_live_stats` -> `DraftState["lane_filtered_aggregate"]`) —
-  built FOR the Jev experiment (see below), NOT fed to the LLM: the
-  prompt is deliberately unchanged. `lane_filtered_stats_text` answers
+  originally built as a Jev experiment, now THE candidate list the
+  pipeline actually scores. `lane_filtered_stats_text` answers
   "who counters this one enemy?" once per enemy, so a hero who counters
   two of them reads as two unrelated bullets and nothing adds them up.
   This accumulates per-hero totals across every relation already
   fetched (no extra API calls), lane-filtered, one row per hero:
   `{name, win_rate, cumulative_counter_impact,
-  cumulative_synergy_impact, counters[], synergises_with[]}`. The last
-  two are provenance beyond the originally-specified schema. Ordering
+  cumulative_synergy_impact, counters[], synergises_with[], rag_score,
+  notes[]}`. `counters`/`synergises_with`/`notes` are provenance beyond
+  the originally-specified schema. Ordering
   is `synergy - counter` (counter impact is negative-is-better) and is
   presentation only — NO composite score is stored, because how to
   weight the two axes against each other is not established. Surfaced
@@ -60,6 +91,74 @@ self-repair loop). See README.md for full phase-by-phase status.
   table is ~75 chars and `.diag pre` sets `white-space: pre-wrap`, so
   column alignment collapses on a ~390px viewport; left alone rather
   than change CSS shared by all three diagnostics tabs.
+- **`rag_score`** (`src/rag/scoring.py`, 2026-09-23) — per-candidate
+  note relevance, merged into `lane_filtered_aggregate` by
+  `_attach_rag_scores()` in `retrieve_notes`. It lives there and not in
+  `gather_live_stats` purely because of node order: the aggregate is
+  built before retrieval runs. Design chosen ("Design A" in the
+  transcript): reuse the ONE scenario retrieval already happening —
+  `retrieve_notes` switched from the plain retriever to
+  `similarity_search_with_relevance_scores`, which returns the same
+  documents in the same order but also the 0-1 relevance the retriever
+  threw away. VERIFIED byte-identical retrieved-notes text across three
+  queries, so the switch changed no downstream content. Zero extra
+  queries, zero added latency. A per-candidate query was considered and
+  rejected: at 4 chunks with `k=4` both approaches see the identical
+  notes, so the extra ~170ms/candidate buys nothing until the corpus
+  outgrows `k`.
+  Attribution: a note counts for a hero if its `hero_name` metadata
+  matches OR the note text names the hero (`mentions_hero()`, the same
+  whole-word rule `src/web/evidence.py` uses). The second half is the
+  valuable one — the Lapu-Lapu note names Esmeralda as his counter, so
+  it is evidence FOR Esmeralda whenever Lapu-Lapu is drafted.
+  Aggregation is Noisy-OR (probabilistic union), the user's choice:
+  bounded in [0,1], saturating, and it returns 0.0 on an empty list, so
+  a hero named in no note scores 0.0 at any threshold. Scenario
+  conditioning is FREE because the query string contains the lane and
+  the picks — measured on the Esmeralda/Lapu-Lapu note: 0.409 when
+  Lapu-Lapu is an enemy, 0.173 when he is not.
+  KNOWN LIMITATION: `mentions_hero` has no notion of direction. The
+  "Edith as an Esmeralda Counter" note argues AGAINST Esmeralda but
+  still raises her `note_support`. The note text is now in Jev's state
+  so it can in principle read the direction; the scalar alone cannot.
+- **Jev decision node** (`src/agents/jev_client.py`, 2026-09-23) —
+  replaced qwen2.5:3b entirely. Jev is a third-party "System 1"
+  decision model (TypeSafe AI) reached at
+  `https://api.openjev.sh/v1/systemone` with `OPEN_JEV_KEY`, model
+  `openjev`. It emits no text: given a `state` plus `questions` it
+  returns typed primitives with calibrated probabilities. This module
+  owns State Engineering only — `build_payload()` turns
+  `lane_filtered_aggregate` into an abstract state plus one `Score`
+  question per candidate, all in ONE request (fan-out is free, see the
+  empirical findings). No ranking policy lives here.
+  Rubric: 4 ascending tiers `["Fallback","Marginal","Solid","Priority"]`.
+  Metrics are SIGN-FLIPPED so every one is higher-is-better
+  (`counter_strength = -cumulative_counter_impact`) — qwen was
+  previously observed misreading the raw negatives as a "win rate
+  increase", so the trap was removed rather than re-documented.
+  `win_rate` is deliberately NOT in the state: it is a global average
+  with no matchup meaning, ~half of viable counter-picks sit below
+  0.500, and gating on it is exactly what made an earlier draft rubric
+  rate Esmeralda "Unusable" when she was the only valid counter.
+  `is_lane_match` is also absent — the aggregate is already
+  lane-filtered, so it was constant `True`.
+  The rubric deliberately carries NO hard numeric gates. Real ranges go
+  in a `scales` block in the state (typical/strong/max_seen, measured
+  over 21 candidates from 6 scenarios) so Jev knows what a big number
+  is on our axes, then weighs them itself. Hard cuts would make the
+  whole thing arithmetic, at which point an `if` beats a network round
+  trip and Jev adds nothing.
+  Question keys are SANITISED (`viability_X_Borg`, not
+  `viability_X.Borg`) with a map back to real names, because hero names
+  contain spaces, dots, hyphens and apostrophes; this project has
+  already lost time to "Popol and Kupa" being split in two.
+  `build_payload()` returns `({}, {})` for an empty candidate list — a
+  real case, not an error, and more common now that used heroes are
+  excluded.
+  `describe_candidate()` / `summarise()` TEMPLATE the rationale and
+  summary from the same numbers Jev scored. Jev cannot write prose, and
+  templating is arguably an upgrade: qwen was caught inventing "a good
+  win rate against Aamon" for a hero that appeared in no counter data.
 - **Web app** (`src/web/`, replaced the Streamlit dashboard `src/ui/app.py`,
   now deleted) — a Flask JSON API (`server.py`) wrapping the agents, RAG
   and Meta-Watcher with ZERO backend logic changes, plus a static frontend
@@ -88,6 +187,15 @@ self-repair loop). See README.md for full phase-by-phase status.
     "did I launch it"), start returns immediately and the UI polls (the
     wrapper runs its catch-up snapshot BEFORE listening, so "alive but not
     listening yet" is normal), stop falls back to a Windows port-kill.
+    NO LONGER REACHABLE FROM THE UI (2026-09-23): the whole Meta-Watcher
+    panel was removed from the intel rail at the user's request. The
+    module, `/api/meta-watcher`, `/start` and `/stop` all still work and
+    the snapshot schedule still runs — nothing in the app reads them.
+    `api.js`'s `watcher`/`startWatcher`/`stopWatcher` were deleted, as
+    were `renderWatcher()`/`refreshWatcher()` in `intel.js` and the
+    `.md-*`, `.watch-*` and `.moves*` CSS. `.lamp` was KEPT: the topbar
+    status chips use it. Retiring the backend routes is an open decision,
+    not an oversight.
   - **`evidence.py`** derives, per recommended hero, which supporting
     evidence actually appeared in the agent's own context (tier list,
     counter/synergy data, retrieved notes) by parsing `live_stats_summary`
@@ -95,10 +203,27 @@ self-repair loop). See README.md for full phase-by-phase status.
     amber "Model knowledge only" tag when nothing backs a pick — it
     surfaces the grounding gap the Aamon/exp trace found. Changes nothing
     about how recommendations are produced.
-  - **Latency reality**: a real Aamon/exp request through the API took 98s
-    on the first call after startup (model load + concurrent warm-up),
-    vs ~20-30s warm. The loading UI says so honestly instead of showing
-    fake stage progress.
+  - **Latency reality**: SUPERSEDED. The old figures (98s cold, ~20-30s
+    warm) were qwen. Measured 2026-09-23 after the Jev migration: **6.1s
+    warm** end-to-end through `/api/recommend`, ~22.6s on the first call
+    in a fresh process (that is the HuggingFace embedder loading, not
+    Jev). Jev itself is 0.6-0.9s. The loading UI's copy still says "A
+    local model reads the live stats and your notes. This usually takes
+    15 to 30 seconds" and `TYPICAL_SECONDS = 30` in `draft.js` — both
+    now wrong and not yet updated.
+  - **Response contract changed** with the Jev migration. `/api/recommend`
+    no longer returns `parse_error`, `raw_llm_output`, `repair_attempts`
+    or `filtered_out`; it returns `jev_error` and `jev_raw`.
+    `_filtered_out()` was deleted outright — filtering now happens BEFORE
+    evaluation, so there is never a stripped pick to report. Each
+    recommendation carries `{hero, tier, tier_index, score, confidence,
+    probabilities, rationale}` instead of `{hero, priority_score,
+    rationale}`. In the UI, `meter(rec.priority_score)` became
+    `verdict(rec)` — a tier badge plus confidence, with gold reserved for
+    Priority. The bare 0-1 meter was dropped partly because a finish
+    review had already flagged an unlabelled score in that slot as
+    reading like a win probability. The third diagnostics tab is now
+    "Jev response" (raw JSON) instead of "Model output".
   - **Design**: visual world "The Draft Screen, Rebuilt" (MLBB's own
     pick/ban screen grammar), chosen via impeccable's direction round;
     product truth in `PRODUCT.md`, contract in
@@ -110,10 +235,31 @@ self-repair loop). See README.md for full phase-by-phase status.
   - Rebuild CSS: download the Tailwind standalone CLI into `tools/`
     (git-ignored, 112 MB) then `tools\tailwindcss.exe -i
     src/web/styles/input.css -o src/web/static/app.css --minify`.
-- **Eval harness** (`src/eval/`, Phase 7) — two independent pieces so
-  far, deliberately separated because a bad recommendation could be
-  either the LLM's fault or the retriever's fault and you want to
-  know which:
+- **Eval harness** (`src/eval/`, Phase 7) — deliberately separated by
+  layer, because a bad recommendation could be the model's fault or the
+  retriever's fault and you want to know which.
+  - `jev_eval.py` (2026-09-23) is the CURRENT reliability eval and
+    supersedes `reliability_eval.py`. The old metrics are now true by
+    construction (typed output, pre-filtered candidates) and would
+    report a meaningless 100%. It measures what can still go wrong with
+    a decision model instead: **stability** (identical state twice ->
+    identical tiers and order; max score drift), **separation** (does
+    the rubric discriminate or collapse everything into one tier — a
+    perfectly stable rubric that rates everything Solid is useless), and
+    **calibration** as a descriptive confidence spread, since there is
+    no ground truth to score against. It rebuilds live stats ONCE per
+    scenario and reuses that state across repeats, so upstream API drift
+    cannot masquerade as Jev instability. Costs ~12 real API calls, so
+    it never runs automatically. NOT YET RUN — written, not executed.
+  - NOTE the eval axis shifted: Jev emits no tokens, so "hallucination"
+    is not its failure mode. Miscalibration is. Don't port the old
+    factuality framing onto it.
+  - `reliability_eval.py` is SUPERSEDED and marked DO NOT RUN at the top
+    of the file. It still imports and still runs, which is the danger:
+    every state key it reads is gone, so it would report 0 repair
+    attempts and 0 violations and read as a perfect score rather than a
+    missing measurement. Kept only for the record and for the historical
+    numbers in `data/eval_results/`. Described below as it was:
   - `reliability_eval.py` + `scenarios.py`: fixed golden set of draft
     states (not "correct answer" pairs — evals *behavior* across
     repeated runs, not exact-match). Measures JSON-validity rate
@@ -429,6 +575,75 @@ self-repair loop). See README.md for full phase-by-phase status.
   `netstat -ano | grep :8600` and match PIDs via
   `Get-CimInstance Win32_Process`; use `DRAFT_COPILOT_PORT` to test on
   a separate port rather than killing someone else's process.
+- Jev LIVE RESPONSE SHAPE, confirmed against real calls 2026-09-23.
+  `answers.<key>` = `{type, score, legend, probabilities, confidence}`;
+  top level = `{answers, id, model, provider, usage}`. **`score` is a
+  FLOAT**, neither an ordinal index nor a label — it is the
+  probability-weighted expected tier index, and `sum(i * p[i])`
+  reproduced it to within 0.01 on all 9 answers observed. That makes it
+  a CONTINUOUS ranking signal, which solves the tie problem four coarse
+  tiers would otherwise have. The response also carries its own
+  `legend` ({"0":"Fallback",...}); `parse_answers()` reads tiers from
+  that rather than assuming the local list survived the round trip.
+  Tier = the MODE of `probabilities`, not `round(score)`: with a
+  0.45/0.55 split the mean can land on a level Jev never favoured.
+  An earlier parser that handled only int and str scores returned
+  `tier: None` for every row — caught precisely because the first live
+  call was run as a probe instead of being trusted.
+- Jev FAN-OUT IS FREE, measured: 1 candidate 891ms, 7 candidates 859ms
+  in the same session. N questions cost one round trip, which is the
+  architectural claim the whole design rests on. Wall clock 594-891ms
+  is above JEV.md's stated 70-500ms, but that includes network RTT.
+  Cost for the 7-candidate call: **$0.00018** (4275 input / 130 output
+  tokens). Cost is not a constraint at this scale.
+- Jev STABILITY: identical state twice gave 2.99 vs 2.98 — close to
+  deterministic but not exactly, so treat small score differences as
+  noise, not signal. Note-text A/B on the same scenario (prose stripped,
+  `note_support` scalar kept) moved the score 2.99 -> 2.97, barely
+  outside that noise band, i.e. the PROSE made no measurable difference
+  and the scalar carried the signal. Single scenario, so inconclusive
+  rather than settled; the sharper test is the adversarial Edith note.
+- CANDIDATE POOL SHAPE (21 rows, 6 scenarios, 2026-09-23). These
+  constrain any rubric and were measured before writing one:
+  `win_rate_delta` -0.085..+0.086, `counter_strength` 0..0.049 (p50
+  0.027), `synergy_strength` 0..0.051 (nonzero in only 7/21),
+  `rag_score` 0..0.202 (nonzero in only 3/21). Critically: **0/21 rows
+  countered more than one enemy** and **1/21 had both counter and
+  synergy**, so any tier gated on "multiple enemies" or "counter AND
+  synergy" would never fire. 10/21 had a losing win rate. The pool is
+  also pre-filtered twice (API returns top-5 counters; lane filter),
+  so every candidate is already decent — which is why the bottom tier
+  is "Fallback" (weakest of a good set) and not "Avoid".
+- RAG_SCORE THRESHOLD is 0.30 and is NOT portable
+  (`src/rag/scoring.py`). It depends on the embedding model, the
+  distance space AND the query wording together. Measured for the
+  Harrier embedder with the query `retrieve_notes` builds: realistic
+  draft queries score 0.17-0.41, a draft with no applicable note tops
+  out at 0.287, and the weakest true positive is 0.409 — so 0.30 sits
+  in a 0.122-wide gap. For scale: verbatim note text scores 0.96 and a
+  close paraphrase 0.72, which is why thresholds borrowed from
+  cosine-similarity intuition (0.70) return 0.0 unconditionally. An
+  earlier 0.70 and then 0.50 both did exactly that, including on the
+  Esmeralda/Lapu-Lapu case the threshold exists to catch.
+  IMPORTANT: the zeros for heroes with no notes come from Noisy-OR's
+  empty-list branch, NOT from the threshold. Lowering the threshold
+  cannot make a note-less hero non-zero; it only controls whether real
+  evidence registers.
+- QUERY FORMAT MATTERS AND WAS TESTED (2026-09-23). A structured,
+  instructional query ("Find strategy notes relevant to this draft
+  query: - Lane needed: ... - Ally Picks: ...") was tested against the
+  current terse `"Draft advice for: <lane>, <enemies>, <allies>"` and
+  REJECTED. Its constant boilerplate lifted the NOISE FLOOR from 0.287
+  to 0.404 while barely moving true positives, collapsing the usable
+  gap from 0.122 to 0.020 and producing false positives on drafts with
+  no relevant note. It also caused a ranking regression: with allies in
+  the draft the correct note fell from rank 1 to rank 3, behind a note
+  about an ally. Mechanism: the query is not an instruction, nothing
+  reads it — it is a point in vector space, and identical boilerplate
+  in every query pulls all queries toward a common generically-note-like
+  direction, compressing relative differences. Keep queries dense with
+  discriminative tokens. This is the OPPOSITE of prompting an LLM,
+  which is why the structured version looks like it should help.
 - On this dev machine, outbound HTTPS calls (Rone Arena API, PyPI)
   intermittently/reliably failed with `SSLCertVerificationError:
   unable to get local issuer certificate`. Root cause: Norton
@@ -517,7 +732,34 @@ this file's writing:
   Ideas not built: a "lock in" action on the lead pick that places it in
   the next empty ally slot; real hero portraits (licensing);
   optional decorative raster via the Gemini key (unwired, cost unconfirmed).
-- Jev EXPLORATION (2026-09-23, NOT implemented, nothing wired in).
+- JEV MIGRATION SHIPPED 2026-09-23 (the entry below is the superseded
+  exploration note, kept for the access details). Status: qwen dropped
+  entirely, graph rewired, rationale templated, server contract and UI
+  updated, `jev_eval.py` written. The Vercel AI Gateway route in the
+  note below is NOT what shipped — `api.openjev.sh` with `OPEN_JEV_KEY`
+  is, and it sidesteps the Vercel credit-card 403 entirely.
+  VERIFIED: end-to-end through `/api/recommend` (HTTP 200, 6.1s warm,
+  8 candidates tiered Priority..Fallback with templated rationales);
+  through the graph's `__main__`; response shape pinned by a 4-call
+  probe. NOT VERIFIED: `jev_eval.py` has never been executed, and no
+  regression run exists comparing Jev's picks against qwen's on the
+  golden scenarios — the old eval could not be reused for that.
+  WATCH FOR: `/api/health` still reports `{"ollama":true,"model":
+  "qwen2.5:3b"}` and the header chip still renders it, so the UI
+  advertises a dependency the pipeline no longer has. `draft.js`'s
+  `TYPICAL_SECONDS = 30` and the loading copy ("A local model reads...
+  15 to 30 seconds") are stale for the same reason. Neither was fixed.
+  PRODUCT.md and `.impeccable/surfaces/src-web-static-index-html.md`
+  are ALSO stale on all of this (they still describe the 3B local
+  model, the self-repair loop, and 15-30s generation), and PRODUCT.md's
+  principle 4 ("stay local-first and $0-cost by default") is now in
+  tension with a paid third-party dependency — worth an explicit
+  decision rather than silent drift.
+  `misc/jev_probe.py` is the 4-call probe (stability, note-text A/B,
+  fan-out). It originally had no `if __name__ == "__main__"` guard and
+  IMPORTING it fired all four calls; the guard is now there.
+- Jev EXPLORATION — SUPERSEDED, see above. (2026-09-23, written while
+  it was not yet implemented.)
   Jev is a third-party "System 1" decision model (TypeSafe AI, released
   Sept 2026, after this assistant's training cutoff — everything known
   about it comes from `JEV.md`, which is gitignored/local-only, as is

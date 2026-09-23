@@ -1,4 +1,19 @@
 """
+SUPERSEDED 2026-09-23 by src/eval/jev_eval.py — DO NOT RUN. Kept for the
+record of what the qwen2.5:3b pipeline measured, and for the numbers in
+data/eval_results/ that it produced, but it no longer reports anything real.
+
+Every state key it reads (`parsed_recommendation` as a validity signal,
+`repair_attempts`, `raw_recommended_heroes`, `constraint_violations`) was
+written by the generate -> parse -> repair nodes, which were removed when Jev
+replaced the local LLM. The module still imports and still runs; it will just
+report 0 repair attempts and 0 violations for every scenario, which reads as a
+perfect score rather than as a missing measurement. That is exactly the kind
+of silent-zero this project has been bitten by before, hence this notice
+rather than leaving it to be discovered.
+
+--- original docstring below ---
+
 Phase 7, part 1: structured-output + constraint reliability eval for
 the Draft Agent. This is NOT "does the agent give good advice" (that's
 a much harder, more subjective eval — see this module's docstring
