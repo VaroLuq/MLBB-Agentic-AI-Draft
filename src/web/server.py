@@ -30,6 +30,7 @@ from src.web import notes_store, watcher_control, evidence  # noqa: E402
 
 DEFAULT_PORT = 8600
 LANES = ["any", "jungle", "gold", "exp", "mid", "roam"]
+METRICS = ["win_rate", "pick_rate", "ban_rate"]
 MAX_LIST = 12  # generous cap per draft list; the UI enforces the real slot limits
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -408,6 +409,66 @@ def _watcher_status() -> dict:
         "port": watcher_control.PORT,
         "snapshots": _watcher_snapshot_summary(),
     }
+
+
+@app.get("/api/snapshots")
+def snapshots():
+    """Snapshot history as a per-day time series, for the Meta-Watcher view.
+
+    Two shaping decisions the raw files force:
+
+    1. DEDUPE BY DAY. 15 snapshot files cover only 8 distinct days — 2026-09-12
+       alone has six, all byte-identical. Plotting by file would stack six
+       points on one x position and imply a burst of activity that never
+       happened. The last snapshot of each day wins.
+    2. KEEP GAPS AS null. Each snapshot holds the top 50 heroes BY WIN RATE, so
+       the roster churns: 41 heroes appear in every snapshot but 59 appear
+       across the union. A hero dropping out of the top 50 is missing data, not
+       a value of zero, and the chart must break the line rather than draw
+       through it.
+    """
+    from src.agents.meta_watcher import list_snapshots, load_snapshot
+
+    def build():
+        by_day: dict[str, dict] = {}
+        for path in list_snapshots():          # chronological
+            snap = load_snapshot(path)
+            taken = snap.get("taken_at") or ""
+            if taken:
+                by_day[taken[:10]] = snap      # later file on a day overwrites
+        days = sorted(by_day)
+
+        series: dict[str, dict[str, list]] = {}
+        for index, day in enumerate(days):
+            for hero in by_day[day].get("heroes", []):
+                name = hero.get("name")
+                if not name:
+                    continue
+                row = series.setdefault(name, {m: [None] * len(days) for m in METRICS})
+                for metric in METRICS:
+                    row[metric][index] = hero.get(metric)
+
+        # Rank by how much a hero actually moved, so the view can open on the
+        # heroes worth looking at rather than an arbitrary alphabetical slice.
+        movers = []
+        for name, row in series.items():
+            seen = [v for v in row["win_rate"] if v is not None]
+            movers.append({
+                "name": name,
+                "span": (max(seen) - min(seen)) if len(seen) > 1 else 0.0,
+                "points": len(seen),
+                "latest": seen[-1] if seen else None,
+            })
+        movers.sort(key=lambda m: (-m["span"], m["name"]))
+        return {"days": days, "metrics": METRICS, "series": series, "movers": movers}
+
+    try:
+        # Reading and reshaping every snapshot file on each request is wasteful
+        # and they only change once a day.
+        return jsonify(_cached("snapshots", 300, build))
+    except Exception as exc:
+        return _error("snapshots_unreadable", "Couldn't read the snapshot history.",
+                      "Snapshots live in data/snapshots/.", 500, detail=str(exc)[:300])
 
 
 @app.get("/api/meta-watcher")

@@ -1,6 +1,9 @@
+import hashlib
+import json
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 from dotenv import load_dotenv
@@ -31,18 +34,80 @@ DEFAULT_WINDOW_DAYS = 7
 # Caching per (endpoint, args) rather than per request is what makes that
 # overlap count — a whole-request key would essentially never hit.
 #
-# The TTL can afford to be generous: every endpoint now reports over a 7-day
-# trailing window (DEFAULT_WINDOW_DAYS), and the Meta-Watcher treats a 2-point
-# move between daily snapshots as notable, so the underlying numbers move far
-# more slowly than any drafting session.
-CACHE_TTL_SECONDS = float(os.getenv("RONE_CACHE_TTL_SECONDS", "3600"))
+# TTL is deliberately long. Every endpoint reports over a 7-day trailing
+# window (DEFAULT_WINDOW_DAYS), so the underlying numbers move far more slowly
+# than a drafting session. Measured against this project's own snapshot
+# history: the median largest daily win-rate move is 0.13 points, against a
+# counter_strength scale where "typical" is 2.6 points — day-old data almost
+# never changes a recommendation.
+#
+# CAVEAT WORTH KEEPING IN VIEW at the current 96h default: those same snapshots
+# show a 2.31-point move across a 3-day window, and the Meta-Watcher's own
+# threshold for "this is a real meta move" is 2 points. So a 4-day TTL can
+# serve data this codebase would elsewhere call drifted. That is a deliberate,
+# informed trade for speed, not an oversight; lower it if recommendations start
+# disagreeing with the Meta-Watcher view.
+CACHE_TTL_SECONDS = float(os.getenv("RONE_CACHE_TTL_SECONDS", str(96 * 3600)))
+
+# On-disk tier. The in-memory tier dies with the process, so every app launch
+# used to re-pay the startup prefetch (7 calls, 12-17s) plus every hero in the
+# first draft. Disk makes that survive restarts.
+DISK_CACHE_DIR = Path(os.getenv("RONE_CACHE_DIR", "data/api_cache"))
+DISK_CACHE_ENABLED = os.getenv("RONE_DISK_CACHE", "1").lower() not in {"0", "false", "no"}
 
 _cache: dict[tuple, tuple[float, object]] = {}
 _cache_lock = threading.Lock()
 
 
+def _disk_path(key: tuple) -> Path:
+    # The key is a tuple of endpoint + args; hash it for a filesystem-safe name
+    # and keep the endpoint as a readable prefix so the directory is skimmable.
+    digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()[:16]
+    return DISK_CACHE_DIR / f"{str(key[0])[:32]}_{digest}.json"
+
+
+def _disk_read(key: tuple, ttl: float, now: float):
+    if not DISK_CACHE_ENABLED:
+        return None
+    path = _disk_path(key)
+    try:
+        with path.open(encoding="utf-8") as fh:
+            entry = json.load(fh)
+        if now - float(entry["stored_at"]) >= ttl:
+            return None
+        return entry["value"]
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        # A truncated or hand-edited file is a cache miss, never a crash.
+        return None
+
+
+def _disk_write(key: tuple, value: object, now: float) -> None:
+    if not DISK_CACHE_ENABLED:
+        return
+    path = _disk_path(key)
+    try:
+        DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        # Write-then-rename: another process reading concurrently sees either
+        # the old complete file or the new one, never a half-written one.
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump({"key": [str(part) for part in key], "stored_at": now, "value": value}, fh)
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError):
+        pass  # caching is an optimisation; never let it break a request
+
+
 def _cached_call(key: tuple, ttl: float, loader: Callable[[], object]) -> object:
     """Return a cached response, or fetch and store one.
+
+    Two tiers: an in-process dict, then JSON on disk. A warm process never
+    touches the filesystem; a fresh one inherits whatever the last run fetched.
+
+    Wall-clock (`time.time`) rather than `time.monotonic`, because monotonic
+    clocks are not comparable across processes or restarts, and the disk tier
+    has to survive both.
 
     The lock is deliberately NOT held across `loader()`: an HTTP call can take
     seconds, and blocking every other reader for that long would be worse than
@@ -53,16 +118,34 @@ def _cached_call(key: tuple, ttl: float, loader: Callable[[], object]) -> object
     if ttl <= 0:
         return loader()
 
-    now = time.monotonic()
+    now = time.time()
     with _cache_lock:
         hit = _cache.get(key)
         if hit is not None and now - hit[0] < ttl:
             return hit[1]
 
+    from_disk = _disk_read(key, ttl, now)
+    if from_disk is not None:
+        with _cache_lock:
+            # Keep the disk entry's own age; promoting it with a fresh
+            # timestamp would let a value renew itself forever.
+            _cache[key] = (now - _disk_age(key, now), from_disk)
+        return from_disk
+
     value = loader()
+    stored = time.time()
     with _cache_lock:
-        _cache[key] = (time.monotonic(), value)
+        _cache[key] = (stored, value)
+    _disk_write(key, value, stored)
     return value
+
+
+def _disk_age(key: tuple, now: float) -> float:
+    try:
+        with _disk_path(key).open(encoding="utf-8") as fh:
+            return max(0.0, now - float(json.load(fh)["stored_at"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0.0
 
 
 def _ttl(use_cache: bool) -> float:
@@ -70,15 +153,30 @@ def _ttl(use_cache: bool) -> float:
 
 
 def clear_cache() -> None:
-    """Drop every cached response. Call after anything that should see fresh data."""
+    """Drop every cached response, in memory and on disk."""
     with _cache_lock:
         _cache.clear()
+    if not DISK_CACHE_ENABLED:
+        return
+    try:
+        for path in DISK_CACHE_DIR.glob("*.json"):
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def cache_info() -> dict:
-    """Entry count and keys, for diagnostics and tests."""
+    """Entry counts and keys for both tiers, for diagnostics and tests."""
     with _cache_lock:
-        return {"entries": len(_cache), "keys": sorted(str(k) for k in _cache)}
+        info = {"entries": len(_cache), "keys": sorted(str(k) for k in _cache)}
+    info["ttl_seconds"] = CACHE_TTL_SECONDS
+    info["disk_enabled"] = DISK_CACHE_ENABLED
+    info["disk_dir"] = str(DISK_CACHE_DIR)
+    try:
+        info["disk_entries"] = len(list(DISK_CACHE_DIR.glob("*.json"))) if DISK_CACHE_ENABLED else 0
+    except OSError:
+        info["disk_entries"] = 0
+    return info
 
 
 _client = None

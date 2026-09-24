@@ -482,6 +482,84 @@
   .intel-row .r-sub { display: block; font-size: var(--text-xs); color: var(--color-ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
   .intel-row .r-wr { font: 700 var(--text-md)/1 var(--font-sans); color: var(--color-ink); font-variant-numeric: tabular-nums; }
 
+  /* ---- Meta-Watcher: snapshot history ----
+     Six categorical slots, validated with the dataviz validator against this
+     app's panel surface #16212d (dark, adjacent pairs): worst CVD deltaE 8.4,
+     worst normal-vision deltaE 19.3, every slot >= 3:1 on the surface. Six is
+     a hard cap, not a soft one: a seventh series would mean cycling or
+     inventing a hue. Gold is absent on purpose, since this system reserves it
+     for the primary action and the lead pick, and a series wearing it would
+     impersonate that. */
+  .mw-body { --s0:#3987e5; --s1:#d95926; --s2:#199e70; --s3:#c98500; --s4:#d55181; --s5:#9085e9;
+    display: grid; gap: 18px; }
+  .mw-lede { margin: 6px 0 0; }
+
+  .mw-filters { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+  .mw-field { display: grid; gap: 8px; }
+  .mw-field-grow { flex: 1 1 320px; min-width: 0; }
+  .mw-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--color-ink-3); }
+  .mw-heroes { display: flex; flex-wrap: wrap; gap: 6px; max-height: 108px; overflow: auto; padding-right: 4px; }
+  .mw-hero { display: inline-flex; align-items: center; gap: 7px; }
+  .mw-hero:disabled { opacity: .45; }
+  .mw-swing { color: var(--color-ink-3); font-size: var(--text-xs); }
+  .mw-dot { width: 9px; height: 9px; flex: none; transform: skewX(-18deg); background: var(--color-steel); }
+  .mw-dot[data-slot="0"] { background: var(--s0); }
+  .mw-dot[data-slot="1"] { background: var(--s1); }
+  .mw-dot[data-slot="2"] { background: var(--s2); }
+  .mw-dot[data-slot="3"] { background: var(--s3); }
+  .mw-dot[data-slot="4"] { background: var(--s4); }
+  .mw-dot[data-slot="5"] { background: var(--s5); }
+
+  .mw-chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .mw-empty { margin: 18px 0 0; }
+  .mw-plot { position: relative; margin-top: 12px; }
+  .mw-svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+  /* Recessive chrome: solid hairlines, never dashed. */
+  .mw-grid { stroke: var(--color-edge); stroke-width: 1; }
+  .mw-baseline { stroke: var(--color-steel); stroke-width: 1; }
+  .mw-crosshair { stroke: var(--color-steel-hi); stroke-width: 1; }
+  .mw-axis { fill: var(--color-ink-3); font: 500 11px var(--font-sans); font-variant-numeric: tabular-nums; }
+
+  .mw-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .mw-point, .mw-dot-mark { stroke: var(--color-stage-800); stroke-width: 2; }
+  .mw-line[data-slot="0"] { stroke: var(--s0); } .mw-point[data-slot="0"], .mw-dot-mark[data-slot="0"] { fill: var(--s0); }
+  .mw-line[data-slot="1"] { stroke: var(--s1); } .mw-point[data-slot="1"], .mw-dot-mark[data-slot="1"] { fill: var(--s1); }
+  .mw-line[data-slot="2"] { stroke: var(--s2); } .mw-point[data-slot="2"], .mw-dot-mark[data-slot="2"] { fill: var(--s2); }
+  .mw-line[data-slot="3"] { stroke: var(--s3); } .mw-point[data-slot="3"], .mw-dot-mark[data-slot="3"] { fill: var(--s3); }
+  .mw-line[data-slot="4"] { stroke: var(--s4); } .mw-point[data-slot="4"], .mw-dot-mark[data-slot="4"] { fill: var(--s4); }
+  .mw-line[data-slot="5"] { stroke: var(--s5); } .mw-point[data-slot="5"], .mw-dot-mark[data-slot="5"] { fill: var(--s5); }
+  .mw-hit { fill: transparent; }
+
+  .mw-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--color-edge); }
+  .mw-key { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--color-ink-2); }
+
+  .mw-tip {
+    --cut: 8px; --fill: var(--color-stage-900); --edge: var(--color-steel);
+    position: absolute; top: 8px; left: var(--x); padding: 10px 12px; min-width: 150px;
+    pointer-events: none; font-size: var(--text-sm); z-index: 2;
+  }
+  .mw-tip[data-side="right"] { transform: translateX(14px); }
+  .mw-tip[data-side="left"] { transform: translateX(calc(-100% - 14px)); }
+  .mw-tip-day { font-weight: 700; color: var(--color-ink); margin-bottom: 6px; }
+  .mw-tip-row { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 2px 0; }
+  .mw-tip-name { color: var(--color-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mw-tip-val { color: var(--color-ink); font-weight: 600; }
+
+  .mw-table-wrap { overflow: auto; max-height: 340px; margin-top: 12px; }
+  .mw-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+  .mw-table th, .mw-table td { padding: 7px 10px; text-align: right; white-space: nowrap; }
+  .mw-table thead th { position: sticky; top: 0; background: var(--color-stage-800); color: var(--color-ink-2);
+    font-weight: 600; border-bottom: 1px solid var(--color-edge); }
+  .mw-table thead th .mw-dot { display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .mw-table tbody th { text-align: left; color: var(--color-ink-3); font-weight: 500; }
+  .mw-table tbody tr + tr th, .mw-table tbody tr + tr td { border-top: 1px solid color-mix(in oklab, var(--color-edge) 60%, transparent); }
+
+  @media (max-width: 720px) {
+    .mw-filters { flex-direction: column; }
+    .mw-tip { position: static; transform: none; margin-top: 10px; }
+  }
+
   /* ---- notebook ---- */
   .nb-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
   .page-title { font: 700 var(--text-2xl)/1 var(--font-display); text-transform: uppercase; letter-spacing: .06em; margin: 0; }

@@ -42,6 +42,7 @@ const notePath = (id) => id.split("/").map(enc).join("/");
 
 export const api = {
   health: () => request("GET", "/api/health"),
+  snapshots: () => request("GET", "/api/snapshots"),
   heroes: () => request("GET", "/api/heroes"),
   meta: (size = 8) => request("GET", `/api/meta?size=${size}`),
   recommend: (draft) => request("POST", "/api/recommend", draft),

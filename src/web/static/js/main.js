@@ -3,8 +3,9 @@ import { $, $$, icon } from "./ui.js";
 import { initDraft } from "./draft.js";
 import { initIntel } from "./intel.js";
 import { initNotebook, showNotebook } from "./notebook.js";
+import { initMetaWatcher, showMetaWatcher } from "./metawatcher.js";
 
-const TITLES = { draft: "Draft", notebook: "Notebook" };
+const TITLES = { draft: "Draft", notebook: "Notebook", metawatcher: "Meta-Watcher" };
 
 // Static markup declares icons as data-icon="name"; drawn here so the icon
 // family stays defined in one place (icons.js).
@@ -12,7 +13,9 @@ $$("[data-icon]").forEach((node) => node.prepend(icon(node.dataset.icon)));
 
 // ---------------------------------------------------------------- routing
 function route(initial = false) {
-  const view = location.hash === "#/notebook" ? "notebook" : "draft";
+  const view = location.hash === "#/notebook" ? "notebook"
+    : location.hash === "#/meta-watcher" ? "metawatcher"
+    : "draft";
   for (const name of Object.keys(TITLES)) {
     $(`#view-${name}`).hidden = name !== view;
     const link = $(`#nav-${name}`);
@@ -21,6 +24,7 @@ function route(initial = false) {
   }
   document.title = `${TITLES[view]} · Draft Copilot`;
   if (view === "notebook") showNotebook();
+  if (view === "metawatcher") showMetaWatcher();
   if (!initial) {
     window.scrollTo(0, 0);
     $(`#view-${view} h1`).focus({ preventScroll: true }); // land keyboard/screen-reader users on the new view
@@ -74,5 +78,6 @@ api.notes().then((data) => { $("#chip-kb").hidden = !data.kb.stale; }).catch(() 
 initDraft();
 initIntel();
 initNotebook();
+initMetaWatcher();
 route(true);
 pollHealth();

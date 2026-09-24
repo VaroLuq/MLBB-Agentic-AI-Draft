@@ -23,6 +23,10 @@ data/raw/*
 data/eval_results/*
 !data/eval_results/.gitkeep
 
+# Cached Rone Arena API responses (see rone_arena_client.CACHE_TTL_SECONDS).
+# Machine-local and expendable: deleting it only costs one slow app launch.
+data/api_cache/
+
 misc/*
 misc/
 
