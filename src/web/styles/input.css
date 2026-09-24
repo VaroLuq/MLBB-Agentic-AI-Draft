@@ -217,6 +217,17 @@
   }
   .portrait::after { background: linear-gradient(155deg, var(--tone-b, #3a4a5c), var(--tone-a, #1d2b3a) 78%); }
   .portrait.gold { --edge: var(--color-gold-hi); --bw: 2px; }
+  /* The real portrait sits ON TOP of the initials badge rather than replacing
+     it, so a missing or failed image degrades to the badge with no empty box
+     and no layout shift. Inset by the bevel border width so the chamfered
+     edge stays visible as a frame. */
+  .portrait > .p-ini { grid-area: 1 / 1; }
+  .portrait.has-img > .p-ini { visibility: hidden; }
+  .portrait > .p-img {
+    grid-area: 1 / 1; width: calc(100% - var(--bw) * 2); height: calc(100% - var(--bw) * 2);
+    object-fit: cover; clip-path: var(--shape-in); display: block;
+  }
+  .hero:disabled .portrait > .p-img { filter: grayscale(.9) brightness(.65); }
 
   /* ---- tag / chip ---- */
   .tag {

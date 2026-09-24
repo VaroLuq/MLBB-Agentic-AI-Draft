@@ -207,6 +207,12 @@ def list_heroes(size: int = 50) -> list[dict]:
         heroes.append({
             "hero_id": data.get("hero_id"),
             "name": hero_info.get("name"),
+            # `head` is a 128x128 square face crop, `smallmap` the 240x390 full
+            # art. Both come back attached to the hero record itself, so the
+            # name->image mapping is the API's, not something reconstructed by
+            # pairing two separately-ordered lists.
+            "head": hero_info.get("head"),
+            "art": hero_info.get("smallmap"),
             "strong_against": relation.get("strong", {}).get("target_hero_id", []),
             "weak_against": relation.get("weak", {}).get("target_hero_id", []),
             "assists": relation.get("assist", {}).get("target_hero_id", []),

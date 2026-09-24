@@ -21,12 +21,14 @@ inventing matchup claims that weren't in its context.
 Live, structured stats (win rates, counters, compatibility) are
 fetched via direct API tool-calls at query time as they change too
 often and are too precise to embed and risk retrieving stale. Those
-responses are cached per hero for an hour (`RONE_CACHE_TTL_SECONDS`),
-which matters during a real draft: picks accumulate, so each request
-mostly re-asks about heroes already fetched. Over a four-request
-draft that's 23 API calls down to 8, and the last and slowest request
-drops from 8 calls to 1. Snapshots and the "Refresh live intel"
-button bypass the cache, since both exist to see current data.
+responses are cached per hero, in memory and on disk, for 96 hours by
+default (`RONE_CACHE_TTL_SECONDS`). That matters during a real draft:
+picks accumulate, so each request mostly re-asks about heroes already
+fetched. Over a four-request draft that's 23 API calls down to 8, and
+the last and slowest request drops from 8 calls to 1. Because the disk
+tier survives restarts, a returning session pays 2.5s for a draft that
+cost 9s the first time. Snapshots and the "Refresh live intel" button
+bypass the cache, since both exist to see current data.
 Heroes that *aren't* cached yet are fetched concurrently rather than
 one after another (`RONE_FETCH_WORKERS`, default 4), which is worth
 about 3.6x on a fresh draft — those calls were 96% of a
@@ -62,9 +64,15 @@ source venv/bin/activate        # macOS/Linux
 pip install -r requirements.txt
 cp .env.example .env            # then add your OPEN_JEV_KEY
 
-python -m src.rag.ingest        # index the sample strategy notes
-python -m src.web.server --open # starts the app and opens http://localhost:8600
+python -m src.rag.ingest            # index the sample strategy notes
+python -m src.web.fetch_hero_images # download hero portraits (optional)
+python -m src.web.server --open     # starts the app and opens http://localhost:8600
 ```
+
+Hero portraits come from the Rone Arena API and are downloaded locally
+(5.4 MB, 133 heroes); the art is Moonton's, so it isn't committed to
+this repo. Skipping that step is fine — every hero falls back to a
+generated initials badge and nothing else changes.
 
 The app starts serving immediately but spends about 20 seconds in the
 background loading the embedding model and pre-fetching the stats every
@@ -79,7 +87,9 @@ cumulative counter/synergy table, the retrieved notes and Jev's raw
 response. Each pick carries a tier (Priority / Solid / Marginal /
 Fallback) and the confidence behind it. The **Notebook** view is
 where you write, edit and delete strategy notes and rebuild the
-knowledge base. The app only listens on localhost.
+knowledge base. The **Meta-Watcher** view plots every snapshot on
+record as a line chart, so you can watch hero win, pick and ban rates
+move over time. The app only listens on localhost.
 
 **Windows tip:** double-click `run_dashboard.bat` instead of using the
 terminal each time — see "Desktop launcher" below.
@@ -94,6 +104,7 @@ terminal each time — see "Desktop launcher" below.
 | `src/agents/jev_client.py` | Jev adapter: builds the candidate state + rubric, one batched request, templates the rationale |
 | `src/rag/scoring.py` | Note-relevance scoring (Noisy-OR) feeding each candidate's `rag_score` |
 | `src/agents/meta_watcher.py` | Deterministic snapshot + drift-detection agent (no LLM needed) |
+| `src/web/fetch_hero_images.py` | Downloads hero portraits from the API into `src/web/static/heroes/` |
 | `src/web/` | The app: Flask JSON API (`server.py`) wrapping the agents/RAG unchanged, plus the static frontend in `static/` (HTML, Tailwind CSS, vanilla JS modules) |
 | `data/raw/` | Your strategy notes (general + per-hero) |
 | `data/snapshots/` | Meta-Watcher's historical snapshots + drift log |

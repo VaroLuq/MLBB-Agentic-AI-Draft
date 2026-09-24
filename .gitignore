@@ -44,3 +44,11 @@ tools/
 
 JEV.md
 LAYA.md
+
+# Hero portraits downloaded from the Rone Arena API by
+# `python -m src.web.fetch_hero_images`. The art is Moonton's, so the repo
+# does not redistribute it; clone, run the command, done. Missing art is a
+# supported state — heroes fall back to generated initials badges.
+src/web/static/heroes/
+
+scrapped-images.json

@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { $, $$, icon } from "./ui.js";
+import { loadPortraits } from "./heroes.js";
 import { initDraft } from "./draft.js";
 import { initIntel } from "./intel.js";
 import { initNotebook, showNotebook } from "./notebook.js";
@@ -75,9 +76,14 @@ $("#chip-kb").addEventListener("click", () => { location.hash = "#/notebook"; })
 api.notes().then((data) => { $("#chip-kb").hidden = !data.kb.stale; }).catch(() => {});
 
 // ------------------------------------------------------------------- boot
-initDraft();
-initIntel();
-initNotebook();
-initMetaWatcher();
-route(true);
-pollHealth();
+// Portraits first: the manifest is a local file, and having it in hand before
+// the first render avoids every portrait painting as initials and then
+// swapping. `finally` so a missing manifest still boots the app.
+loadPortraits().finally(() => {
+  initDraft();
+  initIntel();
+  initNotebook();
+  initMetaWatcher();
+  route(true);
+  pollHealth();
+});

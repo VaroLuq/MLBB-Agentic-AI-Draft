@@ -66,8 +66,27 @@ behaviour, that text is stale — the loop is gone.
   one — 6 measured faster (3.19s vs 4.97s) but a full 5v5 draft would
   mean 10 simultaneous requests against a free community API.
 - **Response cache** (`rone_arena_client.py`, 2026-09-24) — a TTL cache
-  keyed per `(endpoint, args)`, default 3600s, overridable with
-  `RONE_CACHE_TTL_SECONDS`. Added because a recommendation costs
+  keyed per `(endpoint, args)`, **default 96h**, overridable with
+  `RONE_CACHE_TTL_SECONDS`. TWO TIERS: an in-process dict, then JSON on
+  disk in `data/api_cache/` (gitignored). Deliberately ONE TTL for both,
+  not a short memory TTL over a long disk one — with disk behind it a
+  1h memory expiry only triggers a disk re-read, so effective staleness
+  was identical and two knobs implied a distinction that did not exist.
+  Measured: a returning session pays 2.53s instead of 9.08s for the same
+  draft, and the startup prefetch drops 12.1s -> 1.7s across a restart.
+  Implementation points worth not "simplifying" away:
+  - **Wall-clock (`time.time`), not `time.monotonic`.** Monotonic clocks
+    are not comparable across processes or restarts, and the disk tier
+    has to survive both.
+  - **A promoted disk entry keeps its own age.** `_cache[key] = (now -
+    _disk_age(...), value)`, not `(now, value)` — stamping `now` on
+    promotion would let a hot key renew itself forever and never expire.
+    Verified: an 80h-old entry promoted at a 96h TTL expires in ~16h.
+  - **Atomic writes** (temp + `os.replace`): server, CLI and eval can run
+    at once. A corrupt or hand-edited file is treated as a miss, never a
+    crash — verified by feeding it `{ this is not json`.
+  - `clear_cache()` wipes BOTH tiers; `cache_info()` reports both.
+  Added because a recommendation costs
   `2 + len(enemies) + len(allies)` requests and NOTHING was cached:
   measured, an identical request refetched all 8, and HTTP was ~19-21s
   of a ~22s `gather_live_stats` in that run.
@@ -250,6 +269,55 @@ behaviour, that text is stale — the loop is gone.
     `general/x` / `heroes/<Name>/x` shape and re-resolved under `data/raw/`
     before any read/write/delete (`notes_store.py`). Verified live: forged
     request 403, traversal 404/405, bad hero 400, wrong Host 403.
+  - **Meta-Watcher view** (`js/metawatcher.js` + `/api/snapshots`,
+    2026-09-24) — a third nav tab plotting snapshot history as a line
+    chart, built so the user can judge how fast the API data actually
+    moves (it informed the 96h cache TTL). Built following the `dataviz`
+    skill; four decisions in it are load-bearing:
+    - **Deduped by day.** 15 snapshot files cover only 8 distinct days —
+      2026-09-12 alone has six, byte-identical. Plotting per file would
+      stack six points on one x position and imply activity that never
+      happened. Last snapshot of each day wins.
+    - **Gaps stay `null` and BREAK the line.** Each snapshot holds the
+      top 50 heroes BY WIN RATE, so the roster churns: 41 heroes appear
+      in every snapshot, 59 across the union. A hero outside the top 50
+      is missing data, not zero, and drawing through would invent it.
+    - **The x axis is TIME-PROPORTIONAL, not one step per snapshot.**
+      The first version spaced days evenly, which made a 3-day drift
+      (Sep 16->19) look exactly as steep as a 1-day one. On a view whose
+      job is judging rate of change that is an actively lying axis. Do
+      not "simplify" it back to an index scale.
+    - **Six series is a HARD cap.** The palette was validated with the
+      skill's own `validate_palette.js` against this app's panel surface
+      `#16212d` (worst adjacent CVD deltaE 8.4, normal-vision 19.3, all
+      >= 3:1). A seventh series would mean cycling or inventing a hue.
+      Colour follows the entity, not its rank: removing a hero frees
+      only its own slot so survivors never repaint. Gold is excluded
+      because this system reserves it for the primary action / lead pick.
+    Hover mutates the crosshair and tooltip in place rather than
+    re-rendering — a re-render destroys the rect the pointer is inside,
+    which fires mouseleave, which re-renders: a flicker loop. A full
+    table view exists because a tooltip must never be the only way to
+    read a value.
+  - **Hero portraits** (`fetch_hero_images.py` + `js/heroes.js`,
+    2026-09-24) — real art, 133/133 heroes, downloaded to
+    `src/web/static/heroes/` (gitignored) by
+    `python -m src.web.fetch_hero_images`. Source is the Rone Arena
+    API's own `hero.data.head` field (128x128 square face crop;
+    `smallmap` is the 240x390 full art), now surfaced by `list_heroes()`.
+    DOWNLOADED, NOT HOTLINKED: this app loads nothing from a CDN at
+    runtime, and those URLs carry a versioned path segment
+    (`homepage_2_2_16_1232_1`) that will rotate.
+    The image LAYERS OVER the generated initials badge rather than
+    replacing it, so missing or failed art degrades to the badge with no
+    empty box and no layout shift. Verified both paths: deleting a file
+    (onerror removes the img and the `has-img` class) and removing a
+    hero from the manifest (no img rendered at all). The app is fully
+    usable with no art downloaded — that is a supported state.
+    NOTE this reverses what PRODUCT.md and the surface brief still say
+    ("placeholder initial badges only, never scraped or generated game
+    likenesses"). The art is Moonton's; gitignoring it means the repo
+    never redistributes it.
   - **`notes_store.py`** owns note CRUD over the same folder convention
     `note_loader.py` reads. Knowledge-base freshness is a fingerprint of
     the notes written to `vectorstore/.notes_signature` after a rebuild
@@ -810,6 +878,23 @@ behaviour, that text is stale — the loop is gone.
   direction, compressing relative differences. Keep queries dense with
   discriminative tokens. This is the OPPOSITE of prompting an LLM,
   which is why the structured version looks like it should help.
+- HERO ART: use the API's own field, never a scraped name->image list
+  (2026-09-24). A `scrapped-images.json` of 90 name/URL pairs was
+  supplied and its mapping was WRONG for every hero checked: Gloo (a
+  blue slime blob) carried a winged woman, Atlas (a deep-sea mech) a
+  shirtless man, Hylos (a centaur) a cowboy, Baxia (an armadillo) a
+  purple demon, Belerick (a walking tree) an elf, Popol and Kupa (a boy
+  with a wolf) a swordsman. 0 for 6. The URLs were all 240x390, which
+  matches the API's `smallmap`, so the scrape almost certainly paired a
+  name list against a differently-ordered image list — the same class of
+  bug as any two-list join without a key.
+  The API attaches `head` and `smallmap` to the hero record ITSELF, so
+  the mapping is the API's and cannot drift. It also covers 133/133
+  heroes versus the scrape's 90. VERIFY VISUALLY when touching this:
+  render Gloo, Atlas, Baxia, Belerick and Popol and Kupa, whose designs
+  are unmistakable, rather than trusting that names line up. If that
+  JSON is still in the repo root it is dead and misleading — it is not
+  the source of the shipped portraits.
 - On this dev machine, outbound HTTPS calls (Rone Arena API, PyPI)
   intermittently/reliably failed with `SSLCertVerificationError:
   unable to get local issuer certificate`. Root cause: Norton
