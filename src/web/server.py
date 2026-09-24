@@ -104,16 +104,62 @@ def health():
     })
 
 
+def _prefetch_live_stats() -> None:
+    """Warm the API cache with the calls every draft makes regardless of picks.
+
+    The tier list and the lane rosters don't depend on who has been picked, so
+    they can be fetched before the user has decided anything. Measured: with
+    the embedder already warm, a first recommendation on a new draft was
+    ~10s, essentially all of it API calls; this removes two of them plus
+    whichever lane roster the user ends up choosing.
+
+    Arguments MUST match the ones gather_live_stats uses, or the cache keys
+    differ and this warms entries nothing will ever read.
+
+    Runs in its own thread alongside the embedder warm-up rather than after
+    it: one is network-bound and the other CPU-bound, so serialising them
+    would just add their durations together.
+    """
+    from src.agents.draft_agent import VALID_LANES
+    from src.api_client.rone_arena_client import get_hero_rank_stats, get_heroes_by_lane
+
+    started = time.monotonic()
+    tasks = [("tier list", lambda: get_hero_rank_stats(days="7", size=10))]
+    # Bind `lane` per iteration; a bare closure would capture the loop variable.
+    tasks += [(f"{lane} roster", lambda lane=lane: get_heroes_by_lane(lane, size=200))
+              for lane in sorted(VALID_LANES)]
+    tasks.append(("hero list", lambda: _cached("heroes", 1800, lambda: sorted(
+        h["name"] for h in list_heroes(size=200) if h.get("name")))))
+
+    done, failed = 0, 0
+    for label, task in tasks:
+        try:  # per-task, so one unreachable endpoint doesn't skip the rest
+            task()
+            done += 1
+        except Exception as exc:
+            failed += 1
+            print(f"[warmup] prefetch of {label} failed: {exc}", flush=True)
+    print(f"[warmup] live stats prefetched: {done} ok, {failed} failed, "
+          f"{time.monotonic() - started:.1f}s", flush=True)
+
+
 def _warm_agent() -> None:
     """Import the agent stack and load the embedding model in the background,
     so the first recommendation doesn't pay the multi-second import cost."""
+    started = time.monotonic()
+    threading.Thread(target=_prefetch_live_stats, daemon=True).start()
     try:
         from src.agents import draft_agent  # noqa: F401
         from src.rag.vectorstore import get_vectorstore
 
-        get_vectorstore()
+        # Run a throwaway query, don't just construct the store. Building the
+        # Chroma object loads the embedding model, but the first real encode
+        # and the first Chroma read have their own one-off costs, and leaving
+        # those to the first recommendation is the thing this exists to avoid.
+        get_vectorstore().similarity_search_with_relevance_scores("warm up", k=1)
+        print(f"[warmup] ready in {time.monotonic() - started:.1f}s", flush=True)
     except Exception as exc:  # warming is best-effort; real errors surface on use
-        print(f"[warmup] agent warm-up failed (will retry on first use): {exc}")
+        print(f"[warmup] agent warm-up failed (will retry on first use): {exc}", flush=True)
     finally:
         _agent_ready.set()
 

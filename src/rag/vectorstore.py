@@ -1,4 +1,6 @@
 import os
+import threading
+
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
@@ -12,6 +14,7 @@ DEFAULT_PERSIST_DIR = "./vectorstore"
 COLLECTION_NAME = "mlbb_guides"
 
 _cached_vectorstore = None
+_vectorstore_lock = threading.Lock()
 
 
 def _persist_dir() -> str:
@@ -71,18 +74,29 @@ def build_vectorstore(chunks: list[Document]) -> Chroma:
 
 
 def get_vectorstore() -> Chroma:
-
+    # Locked because the web server warms this on a background thread at
+    # startup while still accepting requests. Without the lock a request
+    # arriving mid-warm-up saw `None`, started its own load, and paid the
+    # full embedder cost again — which is exactly what made the first
+    # recommendation after launch slow despite the warm-up existing.
     global _cached_vectorstore
-    if _cached_vectorstore is None:
-        _cached_vectorstore = Chroma(
-            collection_name=COLLECTION_NAME,
-            embedding_function=get_embedding_function(),
-            persist_directory=_persist_dir(),
-            client_settings=_chroma_settings(),
-        )
+    if _cached_vectorstore is not None:
+        return _cached_vectorstore
+
+    with _vectorstore_lock:
+        if _cached_vectorstore is None:
+            _cached_vectorstore = Chroma(
+                collection_name=COLLECTION_NAME,
+                embedding_function=get_embedding_function(),
+                persist_directory=_persist_dir(),
+                client_settings=_chroma_settings(),
+            )
     return _cached_vectorstore
 
 
 def clear_vectorstore_cache() -> None:
+    # Deliberately does NOT clear the embedder: re-ingesting changes the
+    # collection, not the model, so a rebuild should not pay a reload.
     global _cached_vectorstore
-    _cached_vectorstore = None
+    with _vectorstore_lock:
+        _cached_vectorstore = None

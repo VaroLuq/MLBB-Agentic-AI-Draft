@@ -244,14 +244,44 @@ behaviour, that text is stale — the loop is gone.
     amber "Model knowledge only" tag when nothing backs a pick — it
     surfaces the grounding gap the Aamon/exp trace found. Changes nothing
     about how recommendations are produced.
-  - **Latency reality**: SUPERSEDED. The old figures (98s cold, ~20-30s
-    warm) were qwen. Measured 2026-09-23 after the Jev migration: **6.1s
-    warm** end-to-end through `/api/recommend`, ~22.6s on the first call
-    in a fresh process (that is the HuggingFace embedder loading, not
-    Jev). Jev itself is 0.6-0.9s. The loading UI's copy still says "A
-    local model reads the live stats and your notes. This usually takes
-    15 to 30 seconds" and `TYPICAL_SECONDS = 30` in `draft.js` — both
-    now wrong and not yet updated.
+  - **Startup warm-up** (`_warm_agent` + `_prefetch_live_stats`, both
+    daemon threads from `main()`). The embedder warm-up already existed
+    and already ran at startup, but was INEFFECTIVE until 2026-09-24 for
+    two reasons, both fixed: no lock in the RAG layer (a request landing
+    mid-warm-up started a second full model load rather than waiting),
+    and `get_embedding_function()` not being cached at all. It now also
+    runs a throwaway `similarity_search_with_relevance_scores(..., k=1)`
+    rather than just constructing the store, so the first encode and
+    first Chroma read are paid at startup too.
+    `_prefetch_live_stats()` warms the API cache with the 7 calls every
+    draft makes regardless of picks: the tier list, all five lane
+    rosters, and the hero list behind `/api/heroes`. It runs in its OWN
+    thread beside the embedder warm-up, not after it — one is
+    network-bound and the other CPU-bound, so serialising them would
+    just add 12.2s to 17.7s. Measured on a clean start:
+    `live stats prefetched: 7 ok, 0 failed, 12.2s` / `ready in 17.7s`.
+    CRITICAL: the prefetch arguments must match what `gather_live_stats`
+    passes exactly (`days="7", size=10`; `size=200` for rosters) or the
+    cache keys differ and it warms entries nothing ever reads — a silent
+    no-op that still costs 7 calls per launch. Verified key-for-key.
+  - **Latency reality**: SUPERSEDED TWICE. The original figures (98s
+    cold, ~20-30s warm) were qwen. Measured 2026-09-24, on a verified-
+    clean server with warm-up complete:
+    | scenario | time |
+    |---|---|
+    | repeat request, everything cached | 0.88-1.22s |
+    | switch lane, same picks | 1.11s (was a roster fetch) |
+    | new draft, 1 uncached hero | 5.81s |
+    | new draft, 4 uncached heroes | 9.91s |
+    The remaining cost is per-hero counter/synergy data, which CANNOT be
+    prefetched — it depends on who gets picked, and warming all ~130
+    heroes would be ~260 calls per launch. Rone Arena is ~2-3s per call,
+    so a draft's floor is `(enemies + allies) x ~2.5s` on first
+    encounter. Jev is 0.84-3.27s (see the findings below).
+    STALE UI, still not fixed: `TYPICAL_SECONDS = 30` in `draft.js` and
+    the loading copy "A local model reads the live stats and your notes.
+    This usually takes 15 to 30 seconds". Warm requests are now ~1s, so
+    the progress ring barely moves before the answer arrives.
   - **Response contract changed** with the Jev migration. `/api/recommend`
     no longer returns `parse_error`, `raw_llm_output`, `repair_attempts`
     or `filtered_out`; it returns `jev_error` and `jev_raw`.
@@ -616,6 +646,31 @@ behaviour, that text is stale — the loop is gone.
   `netstat -ano | grep :8600` and match PIDs via
   `Get-CimInstance Win32_Process`; use `DRAFT_COPILOT_PORT` to test on
   a separate port rather than killing someone else's process.
+  THIS BIT THREE TIMES IN ONE SESSION (2026-09-23/24) and twice it
+  silently corrupted latency measurements — once producing a 19-20s
+  "warm" figure from pre-cache code. Killing only the PID that netstat
+  reports as LISTENING is NOT enough: a second process can be alive,
+  mid-shutdown or bound-but-not-winning. Before any measurement, kill
+  by command line —
+  `Get-CimInstance Win32_Process -Filter "name='python.exe'" |
+   Where-Object { $_.CommandLine -like '*src.web.server*' }` — then
+  confirm the port is actually free before starting one server.
+  Symptom to watch for: a "warm" number that does not match the
+  in-process measurement of the same code path.
+- LATENCY, measured 2026-09-24 (see the web app bullet for the table).
+  The headline for anyone optimising further: after the response cache
+  and the startup warm-up, NOTHING local is on the critical path any
+  more. A warm repeat is ~1s, and everything above that is third-party
+  network time — Rone Arena at ~2-3s per uncached hero, and Jev.
+  JEV LATENCY IS ERRATIC and worth knowing before chasing it: six calls
+  with an identical 17.8 KB payload gave 2953 / 844 / 3250 / 1000 / 875
+  / 3266 ms — min 844, median 1976, max 3266, a 3.9x spread in two
+  distinct clusters (~850-1000ms and ~2950-3270ms) with nothing in
+  between. Same payload every time, so it is not request size. Well
+  above JEV.md's claimed 70-500ms and above the 594-891ms an earlier
+  probe saw. Cause not determined from here — cold routing or network
+  are both plausible, and n=6 is thin. Do not treat a slow single
+  recommendation as a regression without repeating it.
 - Jev LIVE RESPONSE SHAPE, confirmed against real calls 2026-09-23.
   `answers.<key>` = `{type, score, legend, probabilities, confidence}`;
   top level = `{answers, id, model, provider, usage}`. **`score` is a
@@ -715,17 +770,28 @@ behaviour, that text is stale — the loop is gone.
 ## Conventions used throughout
 
 - Module-level caching pattern for expensive resources (embedding
-  model, vectorstore connection, LLM client) to avoid reloading on
-  every call — see `get_cached_chain`-style patterns in `src/agents/llm.py`
-  and `src/rag/vectorstore.py`. `clear_vectorstore_cache()` must be
-  called after any re-ingestion from a long-lived process (e.g. the
-  web app) to avoid stale connections.
+  model, vectorstore connection, API responses) to avoid reloading on
+  every call — see `src/rag/vectorstore.py`, `src/rag/embedder.py` and
+  `rone_arena_client.py`. `clear_vectorstore_cache()` must be called
+  after any re-ingestion from a long-lived process (e.g. the web app)
+  to avoid stale connections; it deliberately does NOT clear the
+  embedder, since re-ingesting changes the collection, not the model.
+  CORRECTED 2026-09-24: this convention claimed the embedding model was
+  cached and it was NOT — `get_embedding_function()` built a fresh
+  `HuggingFaceEmbeddings` (a full ~20s model load) on every call. Now
+  cached and locked, keyed by model name so changing `EMBEDDING_MODEL`
+  still takes effect. The LLM client reference is also gone with qwen.
+- Caches that a background thread may populate while requests are being
+  served use double-checked locking, not a bare `if x is None`. The
+  bare version let a request arriving mid-warm-up start its own
+  duplicate load instead of waiting for the in-flight one.
 - API client functions are written defensively (`.get()` with
   fallbacks) rather than assuming documented schemas are accurate —
   this API's docs have been wrong before.
 - Deterministic filters (used-hero exclusion, lane-eligibility) are
-  enforced in code after LLM generation, not just requested in the
-  prompt — small local models don't reliably self-police constraints.
+  enforced in code BEFORE the candidate list is scored — they used to
+  run after LLM generation, but the model that needed policing is gone
+  and the filters moved up into `gather_live_stats` instead.
 
 ## Where the project is now / what's next
 

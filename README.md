@@ -63,6 +63,11 @@ python -m src.rag.ingest        # index the sample strategy notes
 python -m src.web.server --open # starts the app and opens http://localhost:8600
 ```
 
+The app starts serving immediately but spends about 20 seconds in the
+background loading the embedding model and pre-fetching the stats every
+draft needs. It's usable straight away — that work normally finishes
+while you're still setting up your first draft.
+
 On the **Draft** view, add the heroes already picked and
 banned, choose the lane you need, and request a ranked
 recommendation. Each pick shows the live-data or note evidence
