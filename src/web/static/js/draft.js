@@ -11,6 +11,7 @@ const EVIDENCE_ICON = { tier: "trend", counter: "target", synergy: "link", note:
 let heroes = [];
 let heroesError = null;
 let running = false;
+let agentReady = false; // set from main.js's health poll via the agent-state event
 let lastResult = null; // { kind: "result" | "error", ... }
 let diagOpen = false;
 let diagTab = "live";
@@ -22,6 +23,13 @@ export function initDraft() {
   $("#hero-search").addEventListener("input", renderPool);
   $("#hero-search").addEventListener("keydown", onSearchKey);
   $("#btn-recommend").addEventListener("click", requestRecommendation);
+  // main.js owns health polling; the button state is owned here so a
+  // warm-up update and an in-flight request can't fight over `disabled`.
+  document.addEventListener("agent-state", (event) => {
+    agentReady = !!event.detail.ready;
+    syncRecommendButton();
+  });
+  syncRecommendButton();
   $("#btn-clear").addEventListener("click", clearDraft);
   document.addEventListener("keydown", onGlobalKey);
   renderAll();
@@ -231,11 +239,19 @@ function onGlobalKey(event) {
 }
 
 // ------------------------------------------------------ recommendation
+function syncRecommendButton() {
+  const button = $("#btn-recommend");
+  button.disabled = running || !agentReady;
+  $("#recommend-label").textContent = agentReady ? "Get recommendation" : "Warming up";
+  button.title = agentReady ? ""
+    : "Loading the note index and current stats. This takes about 20 seconds after launch.";
+}
+
 async function requestRecommendation() {
-  if (running) return;
+  if (running || !agentReady) return;
   running = true;
   const button = $("#btn-recommend");
-  button.disabled = true;
+  syncRecommendButton();
   button.setAttribute("aria-busy", "true");
   lastResult = { kind: "loading", startedAt: Date.now() };
   renderResults();
@@ -254,7 +270,7 @@ async function requestRecommendation() {
   } finally {
     clearInterval(tick);
     running = false;
-    button.disabled = false;
+    syncRecommendButton();
     button.removeAttribute("aria-busy");
     diagOpen = lastResult.kind === "result" && !lastResult.data.recommendation;
     diagTab = diagOpen ? "raw" : "live";
@@ -262,7 +278,7 @@ async function requestRecommendation() {
   }
 }
 
-const TYPICAL_SECONDS = 30;
+const TYPICAL_SECONDS = 8;
 
 function updateLoading() {
   const node = $("#loading-ring");
@@ -272,8 +288,8 @@ function updateLoading() {
   node.querySelector(".arc").style.strokeDashoffset = String(circumference * (1 - Math.min(elapsed / TYPICAL_SECONDS, 1)));
   node.querySelector("text").textContent = `${elapsed}s`;
   $("#loading-note").textContent = elapsed > TYPICAL_SECONDS
-    ? "Taking longer than usual. The first request after a quiet spell loads the model, which can take a minute or more."
-    : "A local model reads the live stats and your notes. This usually takes 15 to 30 seconds.";
+    ? "Taking longer than usual. Heroes not seen before are fetched from the live stats API, which is the slow part."
+    : "Reading the live stats and your notes, then ranking the candidates.";
 }
 
 function renderResults(justFinished = false) {

@@ -22,7 +22,6 @@ if %ERRORLEVEL%==0 (
 )
 
 echo Starting Draft Copilot...
-echo (Recommendations need Ollama running - the header shows its status.)
 echo Close this window to stop the app.
 echo.
 

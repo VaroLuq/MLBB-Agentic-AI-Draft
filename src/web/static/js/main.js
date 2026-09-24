@@ -35,17 +35,33 @@ function setModel(tone, text, title) {
   $("#chip-llm").title = title;
 }
 
+// The chip reports warm-up, not a local model. Loading the note index and
+// pre-fetching the current stats takes ~20s after launch, and a recommendation
+// requested before that finishes blocks on it — so the state has to be visible
+// rather than something the user discovers by waiting.
 async function pollHealth() {
-  let online = false;
+  let ready = false;
   try {
     const health = await api.health();
-    online = health.ollama;
-    setModel(online ? "ok" : "warn", online ? "Ollama ready" : "Ollama offline",
-      online ? `Model: ${health.model}` : "Start Ollama and this reconnects on its own. Recommendations need it.");
+    ready = health.ready;
+    if (!health.jev_configured) {
+      setModel("warn", "No API key",
+        "OPEN_JEV_KEY is missing from .env. Recommendations can't run without it.");
+    } else if (ready) {
+      setModel("ok", "Ready", `Notes indexed and current stats loaded. Ranking model: ${health.model}.`);
+    } else {
+      const waiting = [!health.notes_ready && "note index", !health.stats_ready && "live stats"]
+        .filter(Boolean).join(" and ");
+      setModel("busy", "Warming up", `Loading the ${waiting}. This takes about 20 seconds after launch.`);
+    }
+    document.dispatchEvent(new CustomEvent("agent-state",
+      { detail: { ready: ready && health.jev_configured } }));
   } catch {
     setModel("warn", "Server unreachable", "The Draft Copilot server isn't responding. Restart run_dashboard.bat.");
+    document.dispatchEvent(new CustomEvent("agent-state", { detail: { ready: false } }));
   }
-  setTimeout(pollHealth, online ? 20000 : 5000);
+  // Poll tightly while warming so the UI unlocks promptly, then back off.
+  setTimeout(pollHealth, ready ? 30000 : 1500);
 }
 
 document.addEventListener("kb-state", (event) => { $("#chip-kb").hidden = !event.detail.stale; });

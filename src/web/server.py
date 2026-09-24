@@ -38,7 +38,8 @@ app.json.sort_keys = False
 
 _recommend_lock = threading.Lock()
 _rebuild_lock = threading.Lock()
-_agent_ready = threading.Event()
+_agent_ready = threading.Event()   # embedder + vectorstore loaded
+_stats_ready = threading.Event()   # draft-independent API calls cached
 
 _cache: dict[str, tuple[float, object]] = {}
 _cache_lock = threading.Lock()
@@ -85,22 +86,23 @@ def index():
 
 # --- Health --------------------------------------------------------------
 
-def _ollama_online() -> bool:
-    import requests
-
-    base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    try:
-        return requests.get(f"{base}/api/tags", timeout=1.5).ok
-    except requests.RequestException:
-        return False
-
-
 @app.get("/api/health")
 def health():
+    # Reports warm-up state, not a local model. The old shape returned
+    # `ollama` and the qwen model name; both were left behind by the Jev
+    # migration and the header chip was advertising a dependency this app no
+    # longer has. What a user actually needs to know is whether a
+    # recommendation will be fast or will block on warm-up, plus whether the
+    # one required credential is present.
+    ready = _agent_ready.is_set() and _stats_ready.is_set()
     return jsonify({
-        "ollama": _ollama_online(),
-        "model": os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
-        "agent_ready": _agent_ready.is_set(),
+        "ready": ready,
+        "warming": not ready,
+        "notes_ready": _agent_ready.is_set(),
+        "stats_ready": _stats_ready.is_set(),
+        "model": os.getenv("OPEN_JEV_MODEL", "openjev"),
+        "jev_configured": bool(os.getenv("OPEN_JEV_KEY")),
+        "agent_ready": _agent_ready.is_set(),  # kept: older name, same meaning
     })
 
 
@@ -141,6 +143,11 @@ def _prefetch_live_stats() -> None:
             print(f"[warmup] prefetch of {label} failed: {exc}", flush=True)
     print(f"[warmup] live stats prefetched: {done} ok, {failed} failed, "
           f"{time.monotonic() - started:.1f}s", flush=True)
+    # Set even when some tasks failed: readiness means "warm-up has finished
+    # trying", not "the network is healthy". Leaving it unset on a failed
+    # prefetch would disable the UI's request button forever on an offline
+    # machine, when the real behaviour should be a request that errors clearly.
+    _stats_ready.set()
 
 
 def _warm_agent() -> None:
@@ -423,12 +430,31 @@ def watcher_stop():
 
 # --- Entrypoint ----------------------------------------------------------
 
+def _open_when_ready(url: str, cap: float = 90.0) -> None:
+    """Open the browser once warm-up finishes, not the moment the port binds.
+
+    The server can serve HTML within a second, but a recommendation requested
+    before warm-up completes blocks on the embedder load — so opening straight
+    away produced an app that looked ready and then stalled for ~20s on the
+    first click, with nothing explaining why.
+
+    Capped so a hung or failing warm-up still opens the app rather than never
+    opening it at all; the UI shows warming state on its own, so an early open
+    is degraded, not broken.
+    """
+    started = time.monotonic()
+    _agent_ready.wait(timeout=cap)
+    _stats_ready.wait(timeout=max(0.0, cap - (time.monotonic() - started)))
+    webbrowser.open(url)
+
+
 def main():
     port = int(os.getenv("DRAFT_COPILOT_PORT", DEFAULT_PORT))
     url = f"http://localhost:{port}/"
     threading.Thread(target=_warm_agent, daemon=True).start()
     if "--open" in sys.argv:
-        threading.Timer(1.5, webbrowser.open, args=(url,)).start()
+        threading.Thread(target=_open_when_ready, args=(url,), daemon=True).start()
+        print("Warming up (about 20s) — the browser opens when it's ready.")
     print(f"Draft Copilot running at {url}")
     print("  Loopback only. Press Ctrl+C to stop.")
     app.run(host="127.0.0.1", port=port, threaded=True, use_reloader=False)
