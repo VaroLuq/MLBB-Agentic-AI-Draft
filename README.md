@@ -1,6 +1,6 @@
 # Mobile Legends Draft Copilot
 
-An agentic draft assistant for Mobile Legends: Bang Bang — combines
+An agentic draft assistant for Mobile Legends: Bang Bang combines
 live hero stats (Rone Arena API) with RAG over your own curated
 strategy notes, orchestrated with LangGraph. Everything runs locally
 except the final ranking call, which goes to Jev (a hosted decision
@@ -8,7 +8,7 @@ model) at roughly $0.0002 per recommendation.
 
 ## Why it's built this way
 
-The draft agent doesn't generate its recommendation — it ranks. Live
+The draft agent doesn't generate its recommendation; it ranks. Live
 stats are cross-referenced against the lane roster in plain Python to
 build a candidate list, each candidate is scored for note relevance,
 and Jev assigns a tier against a fixed rubric. The rationale you read
@@ -19,7 +19,7 @@ post-hoc constraint filters; it was slower, and it was caught
 inventing matchup claims that weren't in its context.
 
 Live, structured stats (win rates, counters, compatibility) are
-fetched via direct API tool-calls at query time — they change too
+fetched via direct API tool-calls at query time as they change too
 often and are too precise to embed and risk retrieving stale. Those
 responses are cached per hero for an hour (`RONE_CACHE_TTL_SECONDS`),
 which matters during a real draft: picks accumulate, so each request
@@ -27,6 +27,10 @@ mostly re-asks about heroes already fetched. Over a four-request
 draft that's 23 API calls down to 8, and the last and slowest request
 drops from 8 calls to 1. Snapshots and the "Refresh live intel"
 button bypass the cache, since both exist to see current data.
+Heroes that *aren't* cached yet are fetched concurrently rather than
+one after another (`RONE_FETCH_WORKERS`, default 4), which is worth
+about 3.6x on a fresh draft — those calls were 96% of a
+recommendation's time before.
 Narrative strategy content (drafting philosophy, hero-specific
 reasoning) goes through RAG instead, and is manually curated by you
 rather than scraped, since your own judgment is more valuable RAG
@@ -40,7 +44,6 @@ snapshotting stats over time.
 - An `OPEN_JEV_KEY` in `.env` — the draft agent ranks candidates with
   [Jev](https://api.openjev.sh), a hosted decision model. Calls cost
   roughly $0.0002 each.
-- (Optional, for scheduled Meta-Watcher runs) Docker Desktop
 
 Ollama is no longer required. An earlier version generated
 recommendations with a local `qwen2.5:3b`; that model was replaced by
@@ -65,7 +68,7 @@ python -m src.web.server --open # starts the app and opens http://localhost:8600
 
 The app starts serving immediately but spends about 20 seconds in the
 background loading the embedding model and pre-fetching the stats every
-draft needs. It's usable straight away — that work normally finishes
+draft needs. It's usable straight away. That work normally finishes
 while you're still setting up your first draft.
 
 On the **Draft** view, add the heroes already picked and
@@ -113,7 +116,7 @@ knowledge base has fallen out of step with them.
 ## Evaluating the Draft Agent
 
 Jev's output is near-deterministic but not exactly so, and a rubric
-can be perfectly stable while still being useless — so "does it work"
+can be perfectly stable while still being useless, so "does it work"
 is measured across repeated runs against a fixed set of golden draft
 scenarios. `src/eval/jev_eval.py` measures three things:
 
@@ -137,7 +140,7 @@ never runs automatically.
 
 `src/eval/reliability_eval.py` is **superseded and should not be run**.
 It measured JSON-validity, repair-loop rescue rate and raw constraint
-violations — all of which are now true by construction, since Jev
+violations, all of which are now true by construction, since Jev
 returns typed output and is handed a candidate list that has already
 been filtered for lane eligibility and used heroes. It still executes,
 which is the trap: it would report zero failures and read as a perfect
@@ -145,7 +148,7 @@ score rather than a missing measurement. It's kept for the historical
 numbers in `data/eval_results/`.
 
 `src/eval/retrieval_eval.py` separately evaluates RAG retrieval
-quality — independent of ranking, since a bad recommendation could be
+quality. Independent of ranking, since a bad recommendation could be
 the retriever's fault rather than the rubric's, and this tells you
 which. It queries the vector store directly against a hand-labeled
 set of query → expected-note pairs (`src/eval/retrieval_golden_set.py`),
@@ -161,13 +164,13 @@ Both evals save results to `data/eval_results/` (one JSON file per
 run) and append to a shared `data/eval_results/eval_log.txt` for
 tracking over time. Together they measure reliability and
 retrieval correctness, not recommendation *quality* (i.e. whether the
-picks are actually good) — that's a harder, more subjective eval and
+picks are actually good), that's a harder, more subjective eval and
 a likely next step.
 
 ## Desktop launcher (Windows)
 
 `run_dashboard.bat` starts the app with one double-click and opens it
-in your browser — no terminal navigation needed. Right-click it →
+in your browser; no terminal navigation needed. Right-click it →
 **Send to** → **Desktop (create shortcut)** for a normal desktop
 icon. A console window stays open behind the browser (closing it
 stops the app), and launching it again while it's running just
@@ -223,13 +226,13 @@ Schedule Trigger → HTTP Request node posting to
 top-right of the editor) for the daily schedule to run unattended.
 
 If the wrapper happens to be off when the schedule fires, that run is
-just lost — n8n's Docker container never holds the fetched data
+just lost. n8n's Docker container never holds the fetched data
 itself (all the API-calling and file-writing happens inside the
 wrapper on the host, not in Docker), so there's nothing to replay
 later. To avoid silently missing snapshots, the wrapper self-heals
 instead: every time it starts, it checks whether the most recent
 snapshot is more than 20 hours old and immediately takes a catch-up
-one if so — so restarting it after any downtime backfills the gap
+one if so, so restarting it after any downtime backfills the gap
 rather than waiting for tomorrow's trigger.
 
 ## Troubleshooting

@@ -1,4 +1,7 @@
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import TypedDict
+
 from langgraph.graph import StateGraph, END
 
 from src.agents import jev_client
@@ -7,7 +10,13 @@ from src.api_client.rone_arena_client import (
     get_hero_counters,
     get_hero_compatibility,
     get_heroes_by_lane,
+    get_hero_id_to_name_map,
 )
+
+# How many relation fetches run at once. Kept low on purpose: the Rone Arena
+# API is a free community service, and most of the saving is already captured
+# by four in flight.
+RELATION_FETCH_WORKERS = max(1, int(os.getenv("RONE_FETCH_WORKERS", "4")))
 from src.rag.vectorstore import get_vectorstore
 from src.rag.scoring import aggregate_rag_scores, mentions_hero
 
@@ -154,9 +163,46 @@ def gather_live_stats(state: DraftState) -> DraftState:
         if entry["win_rate"] is None and record.get("win_rate") is not None:
             entry["win_rate"] = record["win_rate"]
 
-    for enemy in state.get("enemy_picks", []):
+    # Fetch every relation concurrently. They are independent requests about
+    # different heroes with no data dependency between them, but they used to
+    # run in a plain loop: measured, that made gather_live_stats 96% of a
+    # whole recommendation (21.7s of 22.6s), with six ~3s calls strictly
+    # back to back. Results are consumed below in the original pick order, so
+    # nothing downstream can depend on which finishes first.
+    enemies = state.get("enemy_picks", [])
+    allies = state.get("ally_picks", [])
+    jobs = [("counter", e) for e in enemies] + [("synergy", a) for a in allies]
+    relations: dict[tuple[str, str], tuple[list | None, Exception | None]] = {}
+
+    if jobs:
+        # Populate the shared hero id -> name map BEFORE fanning out. Every
+        # relation parse needs it and it is fetched lazily on first use, so
+        # letting N threads all find it missing would fire N duplicate
+        # fetches of the full 133-hero list (~1.5-3s each).
         try:
-            counters = get_hero_counters(enemy, size=5)
+            get_hero_id_to_name_map()
+        except Exception:
+            pass  # the per-relation calls below report the real failure
+
+        def _fetch(job: tuple[str, str]):
+            kind, hero = job
+            fn = get_hero_counters if kind == "counter" else get_hero_compatibility
+            try:
+                return job, fn(hero, size=5), None
+            except Exception as exc:  # returned, not raised: keeps the job id
+                return job, None, exc
+
+        # Deliberately modest: this is a free community API, and the win is
+        # already most of the way there at four in flight.
+        with ThreadPoolExecutor(max_workers=min(RELATION_FETCH_WORKERS, len(jobs))) as pool:
+            for job, result, exc in pool.map(_fetch, jobs):
+                relations[job] = (result, exc)
+
+    for enemy in enemies:
+        counters, error = relations.get(("counter", enemy), (None, None))
+        try:
+            if error is not None:
+                raise error
             lines.append(f"\nStrong counters to enemy hero {enemy}:")
             for c in counters[:5]:
                 lines.append(
@@ -180,9 +226,11 @@ def gather_live_stats(state: DraftState) -> DraftState:
         except Exception as e:
             lines.append(f"\n(Could not fetch counters for {enemy}: {e})")
 
-    for ally in state.get("ally_picks", []):
+    for ally in allies:
+        compat, error = relations.get(("synergy", ally), (None, None))
         try:
-            compat = get_hero_compatibility(ally, size=5)
+            if error is not None:
+                raise error
             lines.append(f"\nGood teammates for ally hero {ally}:")
             for c in compat[:5]:
                 lines.append(

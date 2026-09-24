@@ -31,6 +31,40 @@ behaviour, that text is stale — the loop is gone.
   (`src/api_client/rone_arena_client.py`). Deliberately NOT put through
   RAG — this data changes too often and is too precise to risk
   retrieving stale.
+- **Parallel relation fetching** (`gather_live_stats`, 2026-09-24) —
+  counter and compatibility calls fan out through a
+  `ThreadPoolExecutor` (`RELATION_FETCH_WORKERS`, default 4, env
+  `RONE_FETCH_WORKERS`). They are independent requests about different
+  heroes with no data dependency, but they used to run in a plain loop:
+  profiled, that made `gather_live_stats` **96.1% of a whole
+  recommendation** (21.69s of 22.58s) against 0.20s for retrieval and
+  0.69s for Jev, with six ~3s calls strictly back to back.
+  Measured, alternating arm order so API drift could not favour one
+  side: 16.59s -> 5.06s and 18.77s -> 4.81s, **median 3.6x**. Overlap
+  traces confirm real concurrency (all calls start at t=0; effective
+  concurrency 3.2x at 4 workers, 5.0x at 6).
+  Two things that make it correct rather than merely faster:
+  - **Results are consumed in the original pick order**, not completion
+    order. The fan-out only collects; the existing loops then read from
+    a dict keyed by `(kind, hero)`. That keeps `live_stats_summary`,
+    `lane_filtered_stats_text` AND `lane_filtered_aggregate`
+    byte-identical to the sequential version — verified on two drafts.
+    It matters most for the aggregate, where completion order would
+    otherwise decide which source populated a hero's `win_rate` first.
+    `_accumulate` therefore still runs single-threaded.
+  - **`get_hero_id_to_name_map()` is called BEFORE the fan-out.** It is
+    fetched lazily on first relation parse, so N threads would each
+    find it missing and fire N duplicate fetches of the full 133-hero
+    list (~1.5-3s each), turning the fix into a regression. This also
+    removed a 2.9s gap that profiling found sitting between the first
+    and second relation call.
+  - Errors are RETURNED from the worker (`(job, None, exc)`), not
+    raised: an exception escaping the pool loses which hero it belonged
+    to. Verified a bad hero name still reports against that hero while
+    valid ones are unaffected.
+  Default of 4 rather than 6 is a politeness call, not a performance
+  one — 6 measured faster (3.19s vs 4.97s) but a full 5v5 draft would
+  mean 10 simultaneous requests against a free community API.
 - **Response cache** (`rone_arena_client.py`, 2026-09-24) — a TTL cache
   keyed per `(endpoint, args)`, default 3600s, overridable with
   `RONE_CACHE_TTL_SECONDS`. Added because a recommendation costs
@@ -264,20 +298,56 @@ behaviour, that text is stale — the loop is gone.
     passes exactly (`days="7", size=10`; `size=200` for rosters) or the
     cache keys differ and it warms entries nothing ever reads — a silent
     no-op that still costs 7 calls per launch. Verified key-for-key.
+    `_stats_ready` is set even when some prefetch tasks FAIL: readiness
+    means "warm-up finished trying", not "the network is healthy".
+    Gating on success would disable the UI's request button forever on
+    an offline machine, when the right behaviour is a request that
+    fails with a clear error.
+    KNOWN GAP: the prefetch does not warm the client's
+    `_hero_id_to_name_cache`. It calls `list_heroes()`, which populates
+    the SERVER's `_cached("heroes", ...)` — a different cache entirely.
+    `gather_live_stats` warms the id->name map itself before fanning
+    out, so the first recommendation still pays ~1.5-3s for it once per
+    process. One line in `_prefetch_live_stats` would remove that.
+  - **Readiness is surfaced, not hidden** (2026-09-24). `--open` now
+    waits for both warm-up events before launching the browser instead
+    of a fixed 1.5s timer, capped at 90s so a hung warm-up still opens
+    the app. `main.js` polls `/api/health` every 1.5s while warming and
+    every 30s once ready, and dispatches an `agent-state` event;
+    `draft.js` owns the button and reconciles `running || !agentReady`
+    in one place. Button state is deliberately NOT set from `main.js`:
+    a health poll landing mid-request would otherwise re-enable the
+    button under a running request. While warming the chip shows a
+    pulsing gold "Warming up" naming what is still loading and the
+    primary button reads "Warming up" and is disabled.
+  - **`/api/health` was rewritten** because it was lying: it returned
+    `{"ollama": true, "model": "qwen2.5:3b"}` and the header chip said
+    "Ollama ready", advertising a dependency the Jev migration deleted.
+    Now `{ready, warming, notes_ready, stats_ready, model,
+    jev_configured}` (plus `agent_ready` kept as an alias).
+    `jev_configured` earns its place: a missing `OPEN_JEV_KEY` was
+    previously invisible until a recommendation failed.
+    Also cleared here: `TYPICAL_SECONDS` 30 -> 8 and the loading copy
+    that claimed "A local model reads ... 15 to 30 seconds".
   - **Latency reality**: SUPERSEDED TWICE. The original figures (98s
     cold, ~20-30s warm) were qwen. Measured 2026-09-24, on a verified-
     clean server with warm-up complete:
     | scenario | time |
     |---|---|
-    | repeat request, everything cached | 0.88-1.22s |
+    | repeat request, everything cached | 0.88-1.45s |
     | switch lane, same picks | 1.11s (was a roster fetch) |
-    | new draft, 1 uncached hero | 5.81s |
-    | new draft, 4 uncached heroes | 9.91s |
+    | new draft, 6 uncached heroes, parallel | 9.55s end-to-end |
+    | same, before parallel fetching | ~19-21s |
     The remaining cost is per-hero counter/synergy data, which CANNOT be
     prefetched — it depends on who gets picked, and warming all ~130
-    heroes would be ~260 calls per launch. Rone Arena is ~2-3s per call,
-    so a draft's floor is `(enemies + allies) x ~2.5s` on first
-    encounter. Jev is 0.84-3.27s (see the findings below).
+    heroes would be ~260 calls per launch. Since 2026-09-24 those calls
+    run concurrently, so the floor is roughly the SLOWEST call per wave
+    (~3s) rather than their sum. Jev is 0.84-3.27s (see the findings).
+    TREAT ABSOLUTE NUMBERS AS INDICATIVE. Rone Arena's own latency
+    swings a lot between sessions: the same startup prefetch measured
+    11.8s and 16.9s an hour apart, and one A/B read 1.4x where a clean
+    alternating-order rerun read 3.6x. Always re-measure both arms in
+    the same session before concluding anything moved.
     STALE UI, still not fixed: `TYPICAL_SECONDS = 30` in `draft.js` and
     the loading copy "A local model reads the live stats and your notes.
     This usually takes 15 to 30 seconds". Warm requests are now ~1s, so
