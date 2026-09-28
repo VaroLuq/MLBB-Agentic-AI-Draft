@@ -246,6 +246,17 @@ def get_hero_rank_stats(
         for record in records:
             data = record.get("data", {})
             hero_info = data.get("main_hero", {}).get("data", {})
+            # Drop nameless rows. The API returns unreleased heroes with
+            # `name: null` — observed 2026-09-28 as hero_id 296, pick_rate 0.0,
+            # ban_rate 1e-06, win_rate 0.8. Two distinct harms: the frontend
+            # crashed on `portrait(null)`, and because this endpoint sorts by
+            # win rate, a hero with essentially no matches and a phantom 80%
+            # ranked FIRST — topping the Live intel rail and the tier list the
+            # draft agent reads. A row with no name cannot be displayed,
+            # matched to a note, or meaningfully snapshotted, so it is dropped
+            # here once instead of guarded at four call sites.
+            if not hero_info.get("name"):
+                continue
             stats.append({
                 "hero_id": data.get("main_heroid"),
                 "name": hero_info.get("name"),
@@ -272,7 +283,12 @@ def get_hero_id_to_name_map(force_refresh: bool = False) -> dict[int, str]:
         # size=200 comfortably covers the full roster (~133 heroes as
         # of testing); adjust upward if the roster grows past that.
         heroes = list_heroes(size=200)
-        _hero_id_to_name_cache = {h["hero_id"]: h["name"] for h in heroes}
+        # Skip nameless entries rather than mapping an id to None: callers do
+        # `id_to_name.get(hero_id, "Unknown hero (...)")`, and a present-but-
+        # None value defeats that default and hands them None instead.
+        _hero_id_to_name_cache = {
+            h["hero_id"]: h["name"] for h in heroes if h.get("name")
+        }
     return _hero_id_to_name_cache
 
 

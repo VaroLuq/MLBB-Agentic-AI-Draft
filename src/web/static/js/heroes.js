@@ -21,6 +21,7 @@ const TONES = [
 
 function hash(text) {
   let h = 2166136261;
+  text = String(text ?? "");
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
     h = Math.imul(h, 16777619);
@@ -29,6 +30,7 @@ function hash(text) {
 }
 
 export function initials(name) {
+  name = String(name ?? "");
   // "Popol and Kupa" -> PK, "X.Borg" -> XB, "Yi Sun-shin" -> YS, "Chang'e" -> CH
   const words = name.replace(/[.\-]/g, " ").split(/\s+/).filter((w) => w && w.toLowerCase() !== "and");
   if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
@@ -48,7 +50,11 @@ export async function loadPortraits() {
   }
 }
 
+// Null-safe on purpose. The upstream API has served heroes with `name: null`
+// (unreleased entries), and one bad row should degrade to an anonymous badge
+// rather than throw and blank the whole list that was rendering it.
 export function portrait(name, { size = 40, gold = false } = {}) {
+  name = typeof name === "string" ? name : "";
   const [a, b] = TONES[hash(name) % TONES.length];
   // Initials live in their own element so the image can hide them without
   // removing them: if the image fails, dropping the `has-img` class brings the
