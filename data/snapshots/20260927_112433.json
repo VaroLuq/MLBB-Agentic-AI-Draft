@@ -1,0 +1,357 @@
+{
+  "taken_at": "2026-09-27T11:24:33.720559+00:00",
+  "days": "7",
+  "size": 50,
+  "heroes": [
+    {
+      "hero_id": 14,
+      "name": "Rafaela",
+      "pick_rate": 0.012014,
+      "ban_rate": 0.134483,
+      "win_rate": 0.593143
+    },
+    {
+      "hero_id": 132,
+      "name": "Marcel",
+      "pick_rate": 0.002939,
+      "ban_rate": 0.302747,
+      "win_rate": 0.586548
+    },
+    {
+      "hero_id": 108,
+      "name": "Aulus",
+      "pick_rate": 0.005947,
+      "ban_rate": 0.030543,
+      "win_rate": 0.573553
+    },
+    {
+      "hero_id": 88,
+      "name": "Masha",
+      "pick_rate": 0.00668,
+      "ban_rate": 0.156719,
+      "win_rate": 0.570455
+    },
+    {
+      "hero_id": 78,
+      "name": "Khufra",
+      "pick_rate": 0.003036,
+      "ban_rate": 0.016566,
+      "win_rate": 0.554337
+    },
+    {
+      "hero_id": 19,
+      "name": "Minotaur",
+      "pick_rate": 0.010088,
+      "ban_rate": 0.05406,
+      "win_rate": 0.553489
+    },
+    {
+      "hero_id": 45,
+      "name": "Argus",
+      "pick_rate": 0.007295,
+      "ban_rate": 0.019632,
+      "win_rate": 0.552451
+    },
+    {
+      "hero_id": 112,
+      "name": "Floryn",
+      "pick_rate": 0.010738,
+      "ban_rate": 0.121625,
+      "win_rate": 0.54871
+    },
+    {
+      "hero_id": 133,
+      "name": "Hirara",
+      "pick_rate": 0.007139,
+      "ban_rate": 0.632003,
+      "win_rate": 0.547791
+    },
+    {
+      "hero_id": 127,
+      "name": "Lukas",
+      "pick_rate": 0.010653,
+      "ban_rate": 0.202823,
+      "win_rate": 0.542219
+    },
+    {
+      "hero_id": 20,
+      "name": "Lolita",
+      "pick_rate": 0.000777,
+      "ban_rate": 0.001617,
+      "win_rate": 0.541641
+    },
+    {
+      "hero_id": 104,
+      "name": "Gloo",
+      "pick_rate": 0.00736,
+      "ban_rate": 0.360389,
+      "win_rate": 0.541116
+    },
+    {
+      "hero_id": 48,
+      "name": "Diggie",
+      "pick_rate": 0.001855,
+      "ban_rate": 0.030656,
+      "win_rate": 0.5407
+    },
+    {
+      "hero_id": 12,
+      "name": "Bruno",
+      "pick_rate": 0.006544,
+      "ban_rate": 0.007109,
+      "win_rate": 0.538936
+    },
+    {
+      "hero_id": 92,
+      "name": "Carmilla",
+      "pick_rate": 0.010891,
+      "ban_rate": 0.069997,
+      "win_rate": 0.537655
+    },
+    {
+      "hero_id": 130,
+      "name": "Obsidia",
+      "pick_rate": 0.016832,
+      "ban_rate": 0.04574,
+      "win_rate": 0.537161
+    },
+    {
+      "hero_id": 84,
+      "name": "Ling",
+      "pick_rate": 0.007417,
+      "ban_rate": 0.009182,
+      "win_rate": 0.533435
+    },
+    {
+      "hero_id": 94,
+      "name": "Popol and Kupa",
+      "pick_rate": 0.004506,
+      "ban_rate": 0.002288,
+      "win_rate": 0.532807
+    },
+    {
+      "hero_id": 97,
+      "name": "Benedetta",
+      "pick_rate": 0.0035,
+      "ban_rate": 0.002739,
+      "win_rate": 0.531509
+    },
+    {
+      "hero_id": 111,
+      "name": "Edith",
+      "pick_rate": 0.003641,
+      "ban_rate": 0.002514,
+      "win_rate": 0.53064
+    },
+    {
+      "hero_id": 34,
+      "name": "Estes",
+      "pick_rate": 0.007139,
+      "ban_rate": 0.332333,
+      "win_rate": 0.529466
+    },
+    {
+      "hero_id": 23,
+      "name": "Gord",
+      "pick_rate": 0.006759,
+      "ban_rate": 0.005959,
+      "win_rate": 0.527552
+    },
+    {
+      "hero_id": 70,
+      "name": "Belerick",
+      "pick_rate": 0.018531,
+      "ban_rate": 0.522827,
+      "win_rate": 0.525923
+    },
+    {
+      "hero_id": 101,
+      "name": "Yve",
+      "pick_rate": 0.00047,
+      "ban_rate": 0.000405,
+      "win_rate": 0.52513
+    },
+    {
+      "hero_id": 57,
+      "name": "Valir",
+      "pick_rate": 0.009141,
+      "ban_rate": 0.015033,
+      "win_rate": 0.524665
+    },
+    {
+      "hero_id": 25,
+      "name": "Kagura",
+      "pick_rate": 0.007558,
+      "ban_rate": 0.013533,
+      "win_rate": 0.524211
+    },
+    {
+      "hero_id": 93,
+      "name": "Atlas",
+      "pick_rate": 0.010099,
+      "ban_rate": 0.119282,
+      "win_rate": 0.523045
+    },
+    {
+      "hero_id": 43,
+      "name": "Irithel",
+      "pick_rate": 0.004052,
+      "ban_rate": 0.002202,
+      "win_rate": 0.522431
+    },
+    {
+      "hero_id": 27,
+      "name": "Sun",
+      "pick_rate": 0.013726,
+      "ban_rate": 0.188651,
+      "win_rate": 0.52134
+    },
+    {
+      "hero_id": 105,
+      "name": "Beatrix",
+      "pick_rate": 0.006952,
+      "ban_rate": 0.004281,
+      "win_rate": 0.5209
+    },
+    {
+      "hero_id": 99,
+      "name": "Barats",
+      "pick_rate": 0.007862,
+      "ban_rate": 0.045396,
+      "win_rate": 0.519952
+    },
+    {
+      "hero_id": 76,
+      "name": "Faramis",
+      "pick_rate": 0.00078,
+      "ban_rate": 0.002345,
+      "win_rate": 0.519147
+    },
+    {
+      "hero_id": 50,
+      "name": "Zhask",
+      "pick_rate": 0.003506,
+      "ban_rate": 0.003277,
+      "win_rate": 0.519056
+    },
+    {
+      "hero_id": 13,
+      "name": "Clint",
+      "pick_rate": 0.00847,
+      "ban_rate": 0.009273,
+      "win_rate": 0.517147
+    },
+    {
+      "hero_id": 117,
+      "name": "Fredrinn",
+      "pick_rate": 0.004828,
+      "ban_rate": 0.017149,
+      "win_rate": 0.516298
+    },
+    {
+      "hero_id": 80,
+      "name": "Guinevere",
+      "pick_rate": 0.009094,
+      "ban_rate": 0.032377,
+      "win_rate": 0.516003
+    },
+    {
+      "hero_id": 15,
+      "name": "Eudora",
+      "pick_rate": 0.020515,
+      "ban_rate": 0.575541,
+      "win_rate": 0.51459
+    },
+    {
+      "hero_id": 60,
+      "name": "Hanabi",
+      "pick_rate": 0.028239,
+      "ban_rate": 0.059848,
+      "win_rate": 0.513633
+    },
+    {
+      "hero_id": 107,
+      "name": "Natan",
+      "pick_rate": 0.002765,
+      "ban_rate": 0.001147,
+      "win_rate": 0.513631
+    },
+    {
+      "hero_id": 75,
+      "name": "Kadita",
+      "pick_rate": 0.010478,
+      "ban_rate": 0.049106,
+      "win_rate": 0.513315
+    },
+    {
+      "hero_id": 129,
+      "name": "Zetian",
+      "pick_rate": 0.015555,
+      "ban_rate": 0.037163,
+      "win_rate": 0.512218
+    },
+    {
+      "hero_id": 98,
+      "name": "Khaleed",
+      "pick_rate": 0.001228,
+      "ban_rate": 0.00072,
+      "win_rate": 0.511964
+    },
+    {
+      "hero_id": 11,
+      "name": "Bane",
+      "pick_rate": 0.002496,
+      "ban_rate": 0.001326,
+      "win_rate": 0.510289
+    },
+    {
+      "hero_id": 33,
+      "name": "Cyclops",
+      "pick_rate": 0.006256,
+      "ban_rate": 0.002271,
+      "win_rate": 0.509695
+    },
+    {
+      "hero_id": 67,
+      "name": "Leomord",
+      "pick_rate": 0.002919,
+      "ban_rate": 0.004418,
+      "win_rate": 0.509202
+    },
+    {
+      "hero_id": 103,
+      "name": "Paquito",
+      "pick_rate": 0.018966,
+      "ban_rate": 0.47894,
+      "win_rate": 0.508031
+    },
+    {
+      "hero_id": 74,
+      "name": "Minsitthar",
+      "pick_rate": 0.006273,
+      "ban_rate": 0.050099,
+      "win_rate": 0.507796
+    },
+    {
+      "hero_id": 31,
+      "name": "Moskov",
+      "pick_rate": 0.0089,
+      "ban_rate": 0.002358,
+      "win_rate": 0.507427
+    },
+    {
+      "hero_id": 30,
+      "name": "Yi Sun-shin",
+      "pick_rate": 0.015513,
+      "ban_rate": 0.096099,
+      "win_rate": 0.507234
+    },
+    {
+      "hero_id": 100,
+      "name": "Brody",
+      "pick_rate": 0.011841,
+      "ban_rate": 0.025397,
+      "win_rate": 0.50703
+    }
+  ]
+}
