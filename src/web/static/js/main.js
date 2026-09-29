@@ -45,8 +45,14 @@ function setModel(tone, text, title) {
 // requested before that finishes blocks on it — so the state has to be visible
 // rather than something the user discovers by waiting.
 let serverInstance = null;
+// Set once the user deliberately shuts the server down. Without it the poll
+// below would keep firing against a socket that is gone and report the
+// intended outcome as "Server unreachable — restart run_dashboard.bat", which
+// is both alarming and wrong advice for someone who just chose to stop it.
+let stopped = false;
 
 async function pollHealth() {
+  if (stopped) return;
   let ready = false;
   try {
     const health = await api.health();
@@ -116,7 +122,62 @@ async function restartApp() {
   setModel("warn", "Restart timed out", "The server didn't come back. Check data/restart.log.");
 }
 
+// --------------------------------------------------------------- shutdown
+// Unlike restart, this is a one-way door from the browser's point of view —
+// nothing on the page can bring the server back. So the confirm names the
+// command needed to start it again, and the end state is presented as done
+// rather than broken.
+async function shutdownApp() {
+  const button = $("#btn-shutdown");
+  if (button.disabled) return;
+  if (!confirm("Shut down the app server?\n\nThe page will stop working. "
+             + "Run run_dashboard.bat to start it again.")) return;
+
+  button.disabled = true;
+  // Set BEFORE the request, not after: a health poll landing during the await
+  // would otherwise catch the dying socket and flash the unreachable error.
+  stopped = true;
+  $("#btn-restart").disabled = true;
+  document.dispatchEvent(new CustomEvent("agent-state", { detail: { ready: false } }));
+
+  try {
+    await api.shutdown();
+  } catch (error) {
+    // A dropped connection is the expected case — the process exits before
+    // the response can land. Only a real refusal means we are still running.
+    if (error?.status === 409) {
+      stopped = false;
+      button.disabled = false;
+      $("#btn-restart").disabled = false;
+      toast(`${error.message} ${error.hint ?? ""}`.trim(), { tone: "error" });
+      pollHealth();
+      return;
+    }
+  }
+
+  // Confirm it actually went down rather than asserting it. If health still
+  // answers after a few seconds the exit failed, and saying "Stopped" then
+  // would leave a running server the user believes is off.
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    try {
+      await api.health();
+    } catch {
+      setModel("idle", "Stopped", "The app server has shut down. Run run_dashboard.bat to start it again.");
+      toast("App server stopped. This page is no longer live.", { tone: "ok" });
+      return;
+    }
+  }
+  stopped = false;
+  button.disabled = false;
+  $("#btn-restart").disabled = false;
+  setModel("warn", "Still running", "The server did not shut down. Close its terminal window instead.");
+  pollHealth();
+}
+
 $("#btn-restart").addEventListener("click", restartApp);
+$("#btn-shutdown").addEventListener("click", shutdownApp);
 
 document.addEventListener("kb-state", (event) => { $("#chip-kb").hidden = !event.detail.stale; });
 $("#chip-kb").addEventListener("click", () => { location.hash = "#/notebook"; });

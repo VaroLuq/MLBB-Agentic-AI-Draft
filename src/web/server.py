@@ -476,6 +476,33 @@ def restart():
     return jsonify({"restarting": True, "port": port, "log": str(RESTART_LOG)}), 202
 
 
+def _halt() -> None:
+    """Exit without launching a replacement.
+
+    Same `os._exit` as the restart path and for the same reason — a graceful
+    Werkzeug shutdown is not available in this version — but with no child to
+    hand the port to. The brief sleep lets the 202 reach the browser first;
+    without it the socket dies mid-response and the click looks like a network
+    error rather than the shutdown the user asked for.
+    """
+    time.sleep(0.4)
+    os._exit(0)
+
+
+@app.post("/api/shutdown")
+def shutdown():
+    """Stop the server. There is no coming back from this without a terminal.
+
+    Guarded on the same lock as restart: killing the process mid-recommendation
+    would lose an in-flight Jev call the user already paid for.
+    """
+    if _recommend_lock.locked():
+        return _error("busy", "A recommendation is still running.",
+                      "Wait for it to finish, then shut down.", 409)
+    threading.Thread(target=_halt, daemon=True).start()
+    return jsonify({"stopping": True}), 202
+
+
 @app.get("/api/snapshots")
 def snapshots():
     """Snapshot history as a per-day time series, for the Meta-Watcher view.
