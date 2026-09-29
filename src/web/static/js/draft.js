@@ -450,6 +450,10 @@ function aggregateText(rows) {
   const num = (v, signed) => v == null ? "—" : `${signed && v > 0 ? "+" : ""}${v.toFixed(3)}`;
   const width = Math.max(4, ...rows.map((r) => r.name.length));
   const source = (r) => [
+    // "note-admitted" means the hero is in this pool ONLY because a note
+    // named them — the live API lists no relation to anyone drafted, so the
+    // two zeros on that row are structural, not a weak matchup.
+    r.source === "note" ? "note-admitted" : null,
     r.counters?.length ? `counters ${r.counters.join(", ")}` : null,
     r.synergises_with?.length ? `synergy ${r.synergises_with.join(", ")}` : null,
     // Named so a 0.000 RAG score reads as "no note matched" rather than

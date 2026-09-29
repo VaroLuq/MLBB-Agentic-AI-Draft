@@ -5,6 +5,7 @@ scores that have already been fetched, so it touches neither Chroma nor the
 embedding model and stays testable without loading either.
 """
 
+import os
 import re
 
 # Calibrated 2026-09-23 against the Harrier embedder
@@ -21,7 +22,25 @@ import re
 # floor from 0.287 to 0.404 while barely moving true positives, collapsing the
 # usable gap to 0.020 and producing false positives on drafts with no relevant
 # note. Re-calibrate if any of the three change.
-RAG_RELEVANCE_THRESHOLD = 0.40
+#
+# RAISED TO 0.40 by the user 2026-09-29, which is ABOVE the measured weakest
+# true positive (0.409 clears it by 0.009) and above the general PICK/BAN
+# note's 0.398 on a real draft. Since 2026-09-29 this value also gates POOL
+# MEMBERSHIP (see draft_agent._admit_note_heroes), so setting it too high no
+# longer merely zeroes a score — it silently withholds candidates. Overridable
+# from .env so it can be tuned without a code edit; parsed tolerantly because a
+# malformed value here would otherwise crash every importer at startup.
+def _threshold(default: float = 0.40) -> float:
+    try:
+        value = float(os.getenv("RAG_RELEVANCE_THRESHOLD", default))
+    except (TypeError, ValueError):
+        return default
+    # A threshold outside [0, 1) breaks the rescale below (division by <=0, or
+    # a filter nothing can pass), so fall back rather than produce nonsense.
+    return value if 0.0 <= value < 1.0 else default
+
+
+RAG_RELEVANCE_THRESHOLD = _threshold()
 
 
 def mentions_hero(text: str, hero: str) -> bool:

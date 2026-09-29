@@ -215,6 +215,54 @@ behaviour, that text is stale — the loop is gone.
   "Edith as an Esmeralda Counter" note argues AGAINST Esmeralda but
   still raises her `note_support`. The note text is now in Jev's state
   so it can in principle read the direction; the scalar alone cannot.
+- **Note-based pool admission** (`_admit_note_heroes` in
+  `draft_agent.py`, 2026-09-29) — closes a one-way street between notes
+  and candidates. `lane_filtered_aggregate` was populated ONLY from
+  counter/synergy records (`_accumulate` is called from nowhere else),
+  so a hero entered the pool only if the live API named them as a
+  relation to someone already drafted. `_attach_rag_scores` then
+  annotated those rows, meaning a note could only ever RE-RANK a hero
+  the API had already surfaced, never introduce one. The user's
+  `general` PICK/BAN note ("IN ANY DRAFT SCENARIO these heroes MUST BE
+  PICKED OR BANNED") therefore did nothing at all unless its heroes
+  independently happened to counter an enemy.
+  THE INVERSION IS THE WHOLE TRICK: instead of asking "which heroes
+  does this note name?" (name extraction from prose — the exact job
+  that split "Popol and Kupa" into two fictional heroes when a model
+  did it), it asks, for each hero ALREADY ON THE LANE ROSTER, "does any
+  above-threshold note name this one?" The roster was already sitting
+  in `state["valid_lane_heroes"]`, and `mentions_hero()` already
+  existed. Three properties fall out for free and should not be traded
+  away:
+  - lane filtering needs NO parsing of the note. Testing only the exp
+    roster admits Lukas and ignores Hirara/Marcel/Eudora/Bruno without
+    reading the note's `### EXP Lane:` headers or depending on them
+    staying formatted that way.
+  - no hero name can be mangled — names are atomic strings from the
+    API, matched whole-word. There is no tokenisation step to get wrong.
+  - only real, playable heroes can be admitted, because every candidate
+    name came from the API's own roster.
+  Admitted rows carry `source: "note"` and are identically zero on
+  `cumulative_counter_impact`/`cumulative_synergy_impact` with
+  `win_rate: None` (no relation record exists to copy one from; NOT
+  fetched, since it is a global average, is not in Jev's state, and
+  would cost one API call per admitted hero).
+  Admission requires the note to clear `RAG_RELEVANCE_THRESHOLD`;
+  annotation stays more permissive (it keeps every matched note so a
+  0.0 is explainable) because admission changes WHO GETS SCORED and a
+  note barely above the noise floor should not be able to.
+  Skipped entirely when there is no lane roster (fetch failed, or no
+  valid lane requested) — admitting against the full hero list would
+  put heroes in the pool who cannot play the position, which is the
+  exact failure the lane filter exists to prevent. Used/banned heroes
+  are excluded on the same lines `_accumulate` uses.
+  Costs NOTHING: no extra API call and no extra vector query. It
+  iterates a roster already in state and reuses the scores the single
+  scenario retrieval already returned.
+  VERIFIED 2026-09-29 across all five lanes, plus: no-lane and
+  bogus-lane drafts skip admission; a banned Lukas and an ally Lukas
+  are both correctly not admitted; the empty-pool guard still returns
+  `({}, {})`.
 - **Jev decision node** (`src/agents/jev_client.py`, 2026-09-23) —
   replaced qwen2.5:3b entirely. Jev is a third-party "System 1"
   decision model (TypeSafe AI) reached at
@@ -249,10 +297,64 @@ behaviour, that text is stale — the loop is gone.
   `build_payload()` returns `({}, {})` for an empty candidate list — a
   real case, not an error, and more common now that used heroes are
   excluded.
+  NOTE TEXT REACHES JEV UNFILTERED, as of 2026-09-29. Each candidate's
+  `notes` carries the full text of EVERY note `_attach_rag_scores`
+  matched to that hero, including ones below RAG_RELEVANCE_THRESHOLD
+  that contributed 0 to `note_support`. A threshold filter here plus a
+  top-level `draft_notes` block for relevant-but-unattached notes was
+  written earlier, verified, and then LOST — it was never committed
+  (`a4e8bf5` carried only the restart button and
+  `retrieved_notes_detail`) and is not in the tree. Do not assume it
+  exists. Admission reduces how much it matters: a note that names a
+  lane-eligible hero now attaches to a real candidate rather than
+  falling on the floor, so the main gap that block closed is gone.
+  What it would still buy is not showing Jev prose whose relevance
+  score says it is noise.
   `describe_candidate()` / `summarise()` TEMPLATE the rationale and
   summary from the same numbers Jev scored. Jev cannot write prose, and
   templating is arguably an upgrade: qwen was caught inventing "a good
   win rate against Aamon" for a hero that appeared in no counter data.
+  RUBRIC REWORKED 2026-09-29 for note-admitted candidates. This was the
+  real work of that change — admission itself is ~40 lines; making Jev
+  RATE an admitted hero correctly is the hard part. A note-admitted row
+  is zero on both numeric axes and both coverages, and the old rubric
+  told Jev in as many words that "every candidate already appears in
+  the live counter or synergy data, so all of them have some evidence".
+  Under that sentence Lukas is the weakest row in the pool and lands
+  Fallback, which would make the whole feature pointless. Three fixes:
+  - that sentence was now FALSE and was removed;
+  - `source` ("live_stats" | "note") is passed in the state and
+    explained, so Jev reads a note row's zeros as STRUCTURAL (no
+    matchup record exists to read) rather than as absent evidence;
+  - every tier gained a note-candidate clause, so a note alone can
+    reach Solid or Priority, and Fallback explicitly says a note row
+    does NOT belong there merely for having zeros.
+  The note path keys off the `source` FLAG, not the `note_support`
+  MAGNITUDE, and that is deliberate: because RAG_RELEVANCE_THRESHOLD
+  doubles as the Noisy-OR zero point, raising it crushes the scalar —
+  the identical note gave Lukas 0.028 at a 0.40 threshold and 0.103 at
+  0.35. A rubric leaning on that number would break every time the
+  threshold was tuned; a boolean "this hero is here because you wrote
+  about them" does not. Consequently `SCALES["note_support"]`
+  (`nonzero_rate` 0.14, `max_seen` 0.202) is STALE — it was measured
+  when a note could only annotate a hero the live data had already
+  surfaced. Left as-is and marked in the file rather than guessed at;
+  re-measure over a fresh scenario sweep before relying on it.
+  `describe_candidate()` also grew a note branch, because a note row
+  otherwise fell through to "Appears in the live data for this draft,
+  but with no measurable edge" — an outright false statement about a
+  hero with no live data at all. It is keyed off the attached notes
+  rather than `rag_score`, since a note landing exactly ON the
+  threshold rescales to 0.0 and would otherwise lose the one piece of
+  evidence that put the hero in the pool.
+  `-0.0` is normalised to `0.0` (`_unsigned_zero`): negating a zero
+  counter impact serialises as `-0.0`, every note-admitted candidate
+  has exactly that, and handing Jev a minus sign undercuts the rubric
+  sentence telling it those zeros are structural.
+  VERIFIED live 2026-09-29 (Lapu-Lapu / exp, one real call,
+  $0.000097): Lukas rated **Priority 2.67 conf 0.67**, i.e. NOT
+  Fallback, ranked below Esmeralda 2.92 conf 0.92 — correct, since her
+  case has two independent sources and his has one.
 - **Web app** (`src/web/`, replaced the Streamlit dashboard `src/ui/app.py`,
   now deleted) — a Flask JSON API (`server.py`) wrapping the agents, RAG
   and Meta-Watcher with ZERO backend logic changes, plus a static frontend
@@ -765,6 +867,15 @@ behaviour, that text is stale — the loop is gone.
   counters list at all, and described all-negative `increase_win_rate`
   values as a "win rate increase" while still ranking them correctly).
   Fix is writing more notes, not tuning the retriever.
+  STILL TRUE 2026-09-29 (5 notes now, still `k=4`), but the CONSEQUENCE
+  changed. Retrieval remains non-discriminative — every query returns
+  essentially the whole corpus — so the THRESHOLD, not the ranking, is
+  the only filter doing real work, and that is why its exact value
+  matters so much (see the threshold entry). What changed is that notes
+  are no longer inert: note-based admission gives them the power to put
+  a hero in the candidate pool, which is a decision the numbers cannot
+  overrule. Do not read "RAG has no discriminative power" as "notes do
+  not affect the outcome" any more.
 - GOTCHA: a mismatched `EMBEDDING_MODEL` fails SILENTLY at request
   time, not at startup. `.env` had been switched to
   `microsoft/harrier-oss-v1-0.6b` (1024-dim) while the Chroma
@@ -863,6 +974,46 @@ behaviour, that text is stale — the loop is gone.
   empty-list branch, NOT from the threshold. Lowering the threshold
   cannot make a note-less hero non-zero; it only controls whether real
   evidence registers.
+  UPDATED 2026-09-29: the constant is now **0.40** (raised by the user)
+  and is overridable from `.env` via `RAG_RELEVANCE_THRESHOLD`, parsed
+  tolerantly and range-checked to [0, 1) — a malformed or out-of-range
+  value falls back rather than crashing every importer or producing a
+  division by zero in the rescale. It is also no longer only a scoring
+  knob: since note-based pool admission it GATES POOL MEMBERSHIP, so
+  setting it too high silently withholds candidates instead of merely
+  zeroing a score.
+  MEASURED AT 0.40 AND IT BREAKS ONE LANE. The user's `general`
+  PICK/BAN note, same draft (enemy Lapu-Lapu), scored per lane:
+  roam 0.4181, gold 0.4176, exp 0.4168, jungle 0.4141, **mid 0.3975**.
+  At a 0.40 cut, mid misses by 0.0025 and Eudora is NEVER admitted,
+  silently, while the other four lanes work. At 0.35 all five admit
+  correctly. The code default is left at 0.40 because the user set it
+  deliberately; 0.35 is the recommended `.env` value and needs no code
+  edit. Re-measure these five numbers if the note corpus or the
+  embedder changes — they are what makes the choice empirical rather
+  than a preference.
+  THE THRESHOLD IS ALSO THE NOISY-OR ZERO POINT, which is easy to miss
+  and compounds the above: raising it compresses every surviving score
+  toward 0 rather than only filtering. The identical note gave Lukas a
+  `note_support` of 0.028 at 0.40 and 0.103 at 0.35. This is why the
+  Jev rubric keys the note path off the `source` flag instead of the
+  scalar (see the Jev bullet), and why `describe_candidate()` keys off
+  the attached notes instead of `rag_score` — a note landing exactly ON
+  the threshold rescales to 0.0.
+- LANE ROSTERS OVERLAP, so roster-intersection does NOT fully
+  disambiguate a lane-tagged note (2026-09-29). Note-based admission
+  tests the requested lane's roster, which correctly ignores four of
+  the five heroes in the `general` note — but `jungle` admits BOTH
+  Hirara and Lukas, because the API lists Lukas in the exp roster (42
+  heroes) AND the jungle roster (36). The note assigns him to EXP under
+  a `### EXP Lane:` header; the roster intersection cannot see that.
+  This is not a hallucination — it is two true facts crossed (the API
+  says he plays jungle, the note says he is a must-pick) — but it does
+  discard structure the note contains. Left as-is deliberately; the
+  alternative is parsing the note's markdown headers, which is brittle
+  and specific to one note's formatting. An earlier claim in this
+  session that "the lane filter disambiguates for free" was WRONG in
+  general and holds only for heroes that are not lane-flexible.
 - QUERY FORMAT MATTERS AND WAS TESTED (2026-09-23). A structured,
   instructional query ("Find strategy notes relevant to this draft
   query: - Lane needed: ... - Ally Picks: ...") was tested against the

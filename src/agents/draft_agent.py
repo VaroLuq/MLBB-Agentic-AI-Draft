@@ -21,7 +21,11 @@ from src.api_client.rone_arena_client import (
 # stop the app from starting.
 RELATION_FETCH_WORKERS = max(1, int(_env_number("RONE_FETCH_WORKERS", 4, int)))
 from src.rag.vectorstore import get_vectorstore
-from src.rag.scoring import aggregate_rag_scores, mentions_hero
+from src.rag.scoring import (
+    RAG_RELEVANCE_THRESHOLD,
+    aggregate_rag_scores,
+    mentions_hero,
+)
 
 VALID_LANES = {"exp", "mid", "roam", "jungle", "gold"}
 
@@ -155,6 +159,12 @@ def gather_live_stats(state: DraftState) -> DraftState:
             "cumulative_synergy_impact": 0.0,
             "counters": [],
             "synergises_with": [],
+            # How this hero got into the pool. "live_stats" means the API
+            # named them as a counter or synergy for this draft; rows added
+            # later by _admit_note_heroes carry "note" instead. Jev needs the
+            # distinction because a note-sourced row is zero on both numeric
+            # axes BY CONSTRUCTION, not because it is weak.
+            "source": "live_stats",
         })
         impact = record.get("increase_win_rate") or 0.0
         if is_counter:
@@ -317,6 +327,91 @@ def retrieve_notes(state: DraftState) -> DraftState:
     return state
 
 
+def _admit_note_heroes(state: DraftState, scored: list) -> list[dict]:
+    """Add lane-eligible heroes named in a relevant note to the candidate pool.
+
+    Closes the one-way street this pipeline used to have between notes and
+    candidates. `lane_filtered_aggregate` is populated only from counter and
+    synergy records (`_accumulate` is called from nowhere else), so a hero
+    entered the pool only if the live API named them as a relation to someone
+    already drafted. `_attach_rag_scores` then annotates those rows — meaning a
+    note could only ever RE-RANK a hero the API had already surfaced, never
+    introduce one. A note saying "always pick Lukas in exp" therefore had no
+    effect whatsoever unless Lukas independently happened to counter an enemy.
+
+    The admission set is the LANE ROSTER, tested name by name, rather than
+    names parsed out of the note text. That is deliberate and does three jobs
+    at once:
+      - lane filtering is free. The general PICK/BAN note lists a hero per
+        lane; testing only the exp roster admits Lukas and silently ignores
+        Hirara, Marcel, Eudora and Bruno, without parsing the "### EXP Lane:"
+        headers or trusting them to stay formatted that way.
+      - no hero name has to be extracted from prose, so multi-word names
+        ("Popol and Kupa") cannot be split — the same bug class that produced
+        two fictional heroes when a model was doing this job.
+      - a note can only ever admit a hero that genuinely exists and is
+        genuinely playable in this lane, because the roster came from the API.
+
+    Only notes at or above RAG_RELEVANCE_THRESHOLD can admit. Annotation is
+    deliberately more permissive (see _attach_rag_scores, which keeps every
+    matched note so a 0.0 is explainable) — but admission changes WHO gets
+    scored, so a note barely above the noise floor should not be able to.
+
+    Returns the aggregate with any new rows appended.
+    """
+    aggregate = state.get("lane_filtered_aggregate") or []
+    roster = state.get("valid_lane_heroes")
+    # No roster means the lane fetch failed or no lane was requested. Admitting
+    # against the full hero list would put heroes in the pool who cannot play
+    # the position, which is exactly the failure the lane filter exists to
+    # prevent, so admission is skipped rather than loosened.
+    if not roster:
+        return aggregate
+
+    relevant = [
+        (str(doc.metadata.get("hero_name", "general")), score, doc.page_content)
+        for doc, score in scored
+        if score >= RAG_RELEVANCE_THRESHOLD
+    ]
+    if not relevant:
+        return aggregate
+
+    used = {
+        h.lower()
+        for h in (
+            state.get("ally_picks", [])
+            + state.get("enemy_picks", [])
+            + state.get("banned_heroes", [])
+        )
+    }
+    present = {row["name"].lower() for row in aggregate}
+
+    for hero in roster:
+        if hero.lower() in used or hero.lower() in present:
+            continue
+        if not any(
+            tag.lower() == hero.lower() or mentions_hero(text, hero)
+            for tag, _, text in relevant
+        ):
+            continue
+        aggregate.append({
+            "name": hero,
+            # No relation record exists for this hero, so there is no win rate
+            # to copy. Left None rather than fetched: it is a global average
+            # with no matchup meaning, it is not in Jev's state, and buying it
+            # would cost an API call per admitted hero.
+            "win_rate": None,
+            "cumulative_counter_impact": 0.0,
+            "cumulative_synergy_impact": 0.0,
+            "counters": [],
+            "synergises_with": [],
+            "source": "note",
+        })
+        present.add(hero.lower())
+
+    return aggregate
+
+
 def _attach_rag_scores(state: DraftState, scored: list) -> None:
     """Add `rag_score` + `notes` to each row of `lane_filtered_aggregate`.
 
@@ -331,9 +426,7 @@ def _attach_rag_scores(state: DraftState, scored: list) -> None:
     draft. Measured on the Esmeralda/Lapu-Lapu note: 0.409 when Lapu-Lapu is
     an enemy, 0.173 when he is not.
     """
-    aggregate = state.get("lane_filtered_aggregate") or []
-    if not aggregate:
-        return
+    aggregate = _admit_note_heroes(state, scored)
 
     for row in aggregate:
         hero = row.get("name", "")
@@ -356,7 +449,19 @@ def _attach_rag_scores(state: DraftState, scored: list) -> None:
             for tag, s, text in matched
         ]
 
-    state["lane_filtered_aggregate"] = aggregate
+    # Re-sorted because admission appends. Same key gather_live_stats used,
+    # with rag_score as a tiebreaker so note-admitted heroes (identically zero
+    # on both numeric axes) order by note strength instead of roster position.
+    # Still presentation only — no composite score is stored, and Jev ranks by
+    # its own output regardless of the order rows arrive in.
+    state["lane_filtered_aggregate"] = sorted(
+        aggregate,
+        key=lambda h: (
+            h["cumulative_synergy_impact"] - h["cumulative_counter_impact"],
+            h.get("rag_score", 0.0),
+        ),
+        reverse=True,
+    )
 
 
 def evaluate_candidates(state: DraftState) -> DraftState:

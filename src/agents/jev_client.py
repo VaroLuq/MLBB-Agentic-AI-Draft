@@ -36,6 +36,15 @@ TIER_LEVELS = ["Fallback", "Marginal", "Solid", "Priority"]
 SCALES = {
     "counter_strength": {"typical": 0.026, "strong": 0.036, "max_seen": 0.049},
     "synergy_strength": {"typical": 0.016, "strong": 0.032, "max_seen": 0.051},
+    # STALE as of the 2026-09-29 note-admission change and deliberately left
+    # rather than guessed at. These figures were measured when a note could
+    # only annotate a hero the live data had already surfaced. Two things moved
+    # since: heroes can now enter the pool on a note alone, and
+    # RAG_RELEVANCE_THRESHOLD doubles as the Noisy-OR zero point, so raising it
+    # compresses every note_support toward 0 (a note at 0.41 against a 0.40
+    # threshold rescales to 0.017). That is why the rubric keys the note path
+    # off `source`, which is robust to the rescale, rather than off this
+    # magnitude. Re-measure over a fresh scenario sweep before relying on it.
     "note_support": {"nonzero_rate": 0.14, "max_seen": 0.202},
 }
 
@@ -44,11 +53,25 @@ Rate the draft viability of '{hero}' for the '{lane}' lane using its entry in \
 'candidates' and the ranges in 'scales'. All metrics are sign-corrected so \
 HIGHER IS BETTER.
 
-Every candidate here has already passed a lane-eligibility filter, is not \
-already picked or banned, and already appears in the live counter or synergy \
-data for this draft, so all of them have some evidence. Rate relative to this \
-pre-filtered pool: "Fallback" means the weakest evidence among \
+Every candidate here has already passed a lane-eligibility filter and is not \
+already picked or banned, so all of them are playable choices. Rate relative \
+to this pre-filtered pool: "Fallback" means the weakest evidence among \
 already-reasonable options, not a bad hero.
+
+source - how this candidate entered the pool, and it changes how to read the \
+other metrics.
+  "live_stats" - the live API lists this hero as a counter or synergy for this \
+draft. Judge it on counter_strength, synergy_strength and their coverage.
+  "note" - the user's own strategy notes name this hero for this situation, \
+and the live API does not list it as a relation to anyone drafted. \
+counter_strength, synergy_strength and both coverages are therefore EXACTLY \
+ZERO BY CONSTRUCTION, not because the hero is weak — there is simply no \
+matchup record to read. Do not treat those zeros as negative evidence. Judge \
+it on the note that admitted it, whose text is in 'notes'. These notes are \
+hand-written by the player about their own ranked games, so a hero appearing \
+here is a deliberate, situation-specific recommendation rather than a \
+statistical artefact, and it is a strong signal in its own right — a "note" \
+candidate is a real contender, not a filler entry.
 
 counter_strength - how much this hero suppresses the enemy team's win rate, \
 summed over the enemies it counters. Zero means the live data does not list it \
@@ -66,14 +89,30 @@ evidence, not evidence against.
 
 Priority - a strong matchup advantage on either axis, or an ordinary advantage \
 corroborated by a second signal: note support, near-total coverage, or both \
-counter and synergy present.
+counter and synergy present. A "note" candidate belongs here when the note \
+names it as a deliberate pick for a draft like this one.
 Solid - one clear advantage at or above the typical value for its axis, with no \
-corroboration.
+corroboration. A "note" candidate belongs here by default: the player wrote it \
+down, which is evidence, but nothing in the live data independently confirms it.
 Marginal - evidence present but below typical for its kind, with nothing \
-corroborating it.
+corroborating it. A "note" candidate belongs here only when the note mentions \
+it in passing rather than recommending it for this situation.
 Fallback - the weakest evidence in this pool: barely above zero on its single \
-axis, no coverage advantage, no note support.\
+axis, no coverage advantage, no note support. A "note" candidate does NOT \
+belong here merely for having zero counter and synergy values, since those are \
+zero for every "note" candidate by construction.\
 """
+
+
+def _unsigned_zero(value: float) -> float:
+    """Normalise -0.0 to 0.0.
+
+    Negating a 0.0 counter impact yields -0.0, which serialises into the
+    request as `-0.0`. Every note-admitted candidate has exactly that, and the
+    rubric tells Jev those zeros are structural rather than negative evidence —
+    handing it a minus sign undercuts the sentence.
+    """
+    return 0.0 if value == 0 else value
 
 
 def _sanitise(name: str, taken: set[str]) -> str:
@@ -118,12 +157,15 @@ def build_payload(state: dict) -> tuple[dict, dict[str, str]]:
             # Sign flipped so every metric reads higher-is-better. The raw
             # field is negative-is-better, which a model has already been
             # observed misreading as a "win rate increase".
-            "counter_strength": round(-(row.get("cumulative_counter_impact") or 0.0), 4),
+            "counter_strength": _unsigned_zero(
+                round(-(row.get("cumulative_counter_impact") or 0.0), 4)
+            ),
             "counter_coverage": round(len(countered) / len(enemies), 3) if enemies else 0.0,
             "counters": countered,
             "synergy_strength": round(row.get("cumulative_synergy_impact") or 0.0, 4),
             "synergy_coverage": round(len(synergised) / len(allies), 3) if allies else 0.0,
             "synergises_with": synergised,
+            "source": row.get("source", "live_stats"),
             "note_support": row.get("rag_score", 0.0),
             # Inlined rather than referenced from a shared block: at most a
             # handful of short notes exist, so the duplication is trivial and
@@ -243,10 +285,26 @@ def describe_candidate(row: dict) -> str:
         )
 
     note_tags = [n.get("hero_name") for n in (row.get("notes") or []) if n.get("hero_name")]
-    if row.get("rag_score", 0) > 0 and note_tags:
-        parts.append(f"backed by your {_join(note_tags)} notes")
+    # Keyed off the notes actually attached, not off rag_score. A hero admitted
+    # by a note scoring exactly at the threshold has rag_score 0.0 — the
+    # Noisy-OR rescale maps the threshold itself to zero — and would otherwise
+    # lose the one piece of evidence that put it in the pool.
+    if note_tags:
+        tags = _join(sorted(set(note_tags)))
+        if row.get("source") == "note":
+            # Nothing else can be in `parts` — a note-sourced row has no live
+            # relation data at all — so this sentence carries the entire
+            # justification and has to say what is and isn't behind the pick.
+            return (f"Named in your {tags} notes for this draft. The live data "
+                    f"lists no counter or synergy record for this pick.")
+        parts.append(f"backed by your {tags} notes")
 
     if not parts:
+        # A "note" row has no live relation data by construction, so the
+        # live-data wording below would be an outright false statement.
+        if row.get("source") == "note":
+            return ("Named in your strategy notes for this draft. The live "
+                    "data lists no counter or synergy record for this pick.")
         return "Appears in the live data for this draft, but with no measurable edge."
     return _sentence(parts)
 
