@@ -6,6 +6,7 @@ from langgraph.graph import StateGraph, END
 
 from src.agents import jev_client
 from src.api_client.rone_arena_client import (
+    _env_number,
     get_hero_rank_stats,
     get_hero_counters,
     get_hero_compatibility,
@@ -16,7 +17,9 @@ from src.api_client.rone_arena_client import (
 # How many relation fetches run at once. Kept low on purpose: the Rone Arena
 # API is a free community service, and most of the saving is already captured
 # by four in flight.
-RELATION_FETCH_WORKERS = max(1, int(os.getenv("RONE_FETCH_WORKERS", "4")))
+# Same tolerant parsing as the client's TTL: a bad value here should not
+# stop the app from starting.
+RELATION_FETCH_WORKERS = max(1, int(_env_number("RONE_FETCH_WORKERS", 4, int)))
 from src.rag.vectorstore import get_vectorstore
 from src.rag.scoring import aggregate_rag_scores, mentions_hero
 
@@ -32,6 +35,7 @@ class DraftState(TypedDict, total=False):
     role_needed: str
     live_stats_summary: str
     retrieved_notes: str
+    retrieved_notes_detail: list[dict]
     valid_lane_heroes: list[str] | None
     lane_roster_text: str | None
     lane_filtered_stats_text: str | None
@@ -297,6 +301,18 @@ def retrieve_notes(state: DraftState) -> DraftState:
         notes_text = f"(Could not retrieve notes: {e})"
 
     state["retrieved_notes"] = notes_text
+    # Same notes, same order, but keeping the relevance per note. The string
+    # above is what the rest of the pipeline consumes; this is for the
+    # diagnostics panel, where a note's score is the only thing that explains
+    # why a candidate's rag_score came out at 0.
+    state["retrieved_notes_detail"] = [
+        {
+            "hero_name": str(doc.metadata.get("hero_name", "general")),
+            "relevance": round(score, 4),
+            "text": doc.page_content,
+        }
+        for doc, score in scored
+    ]
     _attach_rag_scores(state, scored)
     return state
 

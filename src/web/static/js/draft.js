@@ -468,11 +468,35 @@ function aggregateText(rows) {
   ].join("\n");
 }
 
+// Retrieved notes, each headed by its own relevance. A note's score is the
+// only thing that explains a candidate's rag_score — particularly a 0, which
+// can mean "no note mentioned this hero" or "the notes that did were all
+// below the cut-off", and those are different problems.
+function notesText(data) {
+  const notes = data.retrieved_notes_detail;
+  if (!notes?.length) return data.retrieved_notes || "No notes were retrieved.";
+
+  const threshold = typeof data.rag_threshold === "number" ? data.rag_threshold : null;
+  const counted = threshold == null ? null : notes.filter((n) => n.relevance > threshold).length;
+
+  const head = threshold == null
+    ? `${notes.length} note${notes.length === 1 ? "" : "s"} retrieved.`
+    : `${notes.length} note${notes.length === 1 ? "" : "s"} retrieved; ` +
+      `${counted} above the ${threshold.toFixed(2)} relevance threshold and counted ` +
+      `towards rag_score.`;
+
+  return [head].concat(notes.map((note) => {
+    const above = threshold == null || note.relevance > threshold;
+    const mark = threshold == null ? "" : above ? "  counted" : "  below threshold, ignored";
+    return `[${note.hero_name}]  relevance ${note.relevance.toFixed(3)}${mark}\n${note.text}`;
+  })).join("\n\n");
+}
+
 function diagnostics(data, forceOpen = false) {
   const open = diagOpen || forceOpen;
   const tabs = [
     { id: "live", label: "Live stats", text: [data.live_stats_summary, data.lane_filtered_stats && `\nLane-filtered:\n${data.lane_filtered_stats}`, aggregateText(data.lane_filtered_aggregate)].filter(Boolean).join("\n") || "No live stats were gathered." },
-    { id: "notes", label: "Notes retrieved", text: data.retrieved_notes || "No notes were retrieved." },
+    { id: "notes", label: "Notes retrieved", text: notesText(data) },
     { id: "raw", label: "Jev response", text: [data.jev_error && `Error:\n${data.jev_error}\n`, data.jev_raw ? JSON.stringify(data.jev_raw, null, 2) : "No response recorded."].filter(Boolean).join("\n") },
   ];
   const active = tabs.find((t) => t.id === diagTab) || tabs[0];

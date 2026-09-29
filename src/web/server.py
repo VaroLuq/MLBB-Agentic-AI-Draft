@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -26,6 +27,7 @@ os.chdir(PROJECT_ROOT)  # the RAG/snapshot modules use cwd-relative data paths
 
 from src.api_client.rone_arena_client import list_heroes, get_hero_rank_stats  # noqa: E402
 from src.rag.add_note import add_note  # noqa: E402
+from src.rag.scoring import RAG_RELEVANCE_THRESHOLD  # noqa: E402
 from src.web import notes_store, watcher_control, evidence  # noqa: E402
 
 DEFAULT_PORT = 8600
@@ -39,6 +41,12 @@ app.json.sort_keys = False
 
 _recommend_lock = threading.Lock()
 _rebuild_lock = threading.Lock()
+# Identifies THIS process. The restart flow needs to distinguish a genuinely
+# new server from the outgoing one still answering during its exit window —
+# timing alone cannot, and a client that reloads too early lands on a socket
+# that is about to close.
+INSTANCE_ID = f"{os.getpid()}-{int(time.time() * 1000)}"
+
 _agent_ready = threading.Event()   # embedder + vectorstore loaded
 _stats_ready = threading.Event()   # draft-independent API calls cached
 
@@ -97,6 +105,7 @@ def health():
     # one required credential is present.
     ready = _agent_ready.is_set() and _stats_ready.is_set()
     return jsonify({
+        "instance": INSTANCE_ID,
         "ready": ready,
         "warming": not ready,
         "notes_ready": _agent_ready.is_set(),
@@ -288,6 +297,10 @@ def recommend():
         "lane_filtered_stats": result.get("lane_filtered_stats_text"),
         "lane_filtered_aggregate": result.get("lane_filtered_aggregate") or [],
         "retrieved_notes": notes,
+        "retrieved_notes_detail": result.get("retrieved_notes_detail") or [],
+        # The panel shows each note's relevance; without the cut-off those
+        # numbers don't explain why a candidate scored 0.
+        "rag_threshold": RAG_RELEVANCE_THRESHOLD,
         "elapsed_seconds": elapsed,
         "role_needed": role,
     })
@@ -411,6 +424,58 @@ def _watcher_status() -> dict:
     }
 
 
+RESTART_LOG = Path("data/restart.log")
+
+
+def _relaunch() -> None:
+    """Start a replacement server, then exit so it can take the port.
+
+    Ordering is the whole problem. The replacement cannot bind while this
+    process still holds the socket, and on Windows it would not fail — it
+    would bind alongside and lose every connection to the older process. So
+    the child is launched with `--wait-for-port` and blocks until this process
+    is gone, rather than racing it.
+
+    The child is detached: it must outlive the `os._exit` below, which is
+    deliberate too. A graceful Werkzeug shutdown is not available in this
+    version, and `os._exit` releases the listening socket immediately, which
+    is exactly what the waiting child needs.
+    """
+    import subprocess
+
+    time.sleep(0.4)  # let the 202 reach the browser before the socket dies
+    try:
+        RESTART_LOG.parent.mkdir(parents=True, exist_ok=True)
+        # A detached process has no console, so its output would otherwise be
+        # lost — including warm-up progress and any startup error.
+        log = RESTART_LOG.open("a", encoding="utf-8")
+        log.write(f"\n--- restart requested {datetime.now().isoformat(timespec='seconds')} ---\n")
+        log.flush()
+        flags = 0
+        if os.name == "nt":
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        subprocess.Popen(
+            [sys.executable, "-m", "src.web.server", "--wait-for-port"],
+            cwd=str(PROJECT_ROOT), stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+            creationflags=flags, close_fds=True,
+        )
+    except Exception as exc:  # if the child never starts, stay up and say so
+        print(f"[restart] could not launch replacement: {exc}", flush=True)
+        return
+    os._exit(0)
+
+
+@app.post("/api/restart")
+def restart():
+    if _recommend_lock.locked():
+        return _error("busy", "A recommendation is still running.",
+                      "Wait for it to finish, then restart.", 409)
+    port = int(os.getenv("DRAFT_COPILOT_PORT", DEFAULT_PORT))
+    threading.Thread(target=_relaunch, daemon=True).start()
+    return jsonify({"restarting": True, "port": port, "log": str(RESTART_LOG)}), 202
+
+
 @app.get("/api/snapshots")
 def snapshots():
     """Snapshot history as a per-day time series, for the Meta-Watcher view.
@@ -509,9 +574,43 @@ def _open_when_ready(url: str, cap: float = 90.0) -> None:
     webbrowser.open(url)
 
 
+def _port_in_use(port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.4)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _wait_for_port_free(port: int, timeout: float = 30.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _port_in_use(port):
+            return True
+        time.sleep(0.25)
+    return not _port_in_use(port)
+
+
 def main():
     port = int(os.getenv("DRAFT_COPILOT_PORT", DEFAULT_PORT))
     url = f"http://localhost:{port}/"
+
+    # Windows lets a SECOND process bind a port another is already listening
+    # on, and the OLDER process keeps winning connections. The result is a
+    # server that looks started but serves stale code, with no error anywhere.
+    # That has cost real debugging time on this project, so refuse instead.
+    if _port_in_use(port):
+        if "--wait-for-port" in sys.argv:
+            print(f"Waiting for port {port} to free up...")
+            if not _wait_for_port_free(port):
+                print(f"Port {port} is still in use after 30s; not starting.")
+                return 1
+        else:
+            print(f"Something is already listening on port {port}.")
+            print(f"  If that's Draft Copilot, open {url} - or use the Restart")
+            print("  button in its header. Set DRAFT_COPILOT_PORT to use another port.")
+            return 1
+
     threading.Thread(target=_warm_agent, daemon=True).start()
     if "--open" in sys.argv:
         threading.Thread(target=_open_when_ready, args=(url,), daemon=True).start()
@@ -519,7 +618,8 @@ def main():
     print(f"Draft Copilot running at {url}")
     print("  Loopback only. Press Ctrl+C to stop.")
     app.run(host="127.0.0.1", port=port, threaded=True, use_reloader=False)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

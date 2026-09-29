@@ -47,7 +47,27 @@ DEFAULT_WINDOW_DAYS = 7
 # serve data this codebase would elsewhere call drifted. That is a deliberate,
 # informed trade for speed, not an oversight; lower it if recommendations start
 # disagreeing with the Meta-Watcher view.
-CACHE_TTL_SECONDS = float(os.getenv("RONE_CACHE_TTL_SECONDS", str(96 * 3600)))
+def _env_number(name: str, default: float, cast=float) -> float:
+    """Read a numeric env var, falling back loudly instead of crashing.
+
+    A `.env` holds strings, so a value like `str(48*3600)` — a Python
+    expression someone expected to be evaluated — reaches here verbatim.
+    Raising on that took down the entire app at import time, before the web
+    server could even start and report it. A typo in optional tuning config
+    should degrade to the default, not prevent the process from running.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return cast(raw.strip())
+    except (TypeError, ValueError):
+        print(f"[config] {name}={raw!r} is not a number; using {default}. "
+              f"Write a plain value (e.g. {name}={cast(default)}).", flush=True)
+        return default
+
+
+CACHE_TTL_SECONDS = _env_number("RONE_CACHE_TTL_SECONDS", 96 * 3600)
 
 # On-disk tier. The in-memory tier dies with the process, so every app launch
 # used to re-pay the startup prefetch (7 calls, 12-17s) plus every hero in the

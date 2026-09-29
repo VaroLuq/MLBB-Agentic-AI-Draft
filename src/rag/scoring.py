@@ -21,7 +21,7 @@ import re
 # floor from 0.287 to 0.404 while barely moving true positives, collapsing the
 # usable gap to 0.020 and producing false positives on drafts with no relevant
 # note. Re-calibrate if any of the three change.
-RAG_RELEVANCE_THRESHOLD = 0.30
+RAG_RELEVANCE_THRESHOLD = 0.40
 
 
 def mentions_hero(text: str, hero: str) -> bool:

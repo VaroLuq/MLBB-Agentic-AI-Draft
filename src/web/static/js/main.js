@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { $, $$, icon } from "./ui.js";
+import { $, $$, icon, toast } from "./ui.js";
 import { loadPortraits } from "./heroes.js";
 import { initDraft } from "./draft.js";
 import { initIntel } from "./intel.js";
@@ -44,10 +44,13 @@ function setModel(tone, text, title) {
 // pre-fetching the current stats takes ~20s after launch, and a recommendation
 // requested before that finishes blocks on it — so the state has to be visible
 // rather than something the user discovers by waiting.
+let serverInstance = null;
+
 async function pollHealth() {
   let ready = false;
   try {
     const health = await api.health();
+    serverInstance = health.instance ?? serverInstance;
     ready = health.ready;
     if (!health.jev_configured) {
       setModel("warn", "No API key",
@@ -68,6 +71,52 @@ async function pollHealth() {
   // Poll tightly while warming so the UI unlocks promptly, then back off.
   setTimeout(pollHealth, ready ? 30000 : 1500);
 }
+
+// ---------------------------------------------------------------- restart
+// The old process must release the port before the replacement can take it,
+// so the server exits itself and the child waits. From here that means the
+// server goes away for a few seconds: poll until it answers again, then
+// reload so the page is running the code that just started.
+async function restartApp() {
+  const button = $("#btn-restart");
+  if (button.disabled) return;
+  if (!confirm("Restart the app server? Any recommendation in progress will be lost.")) return;
+
+  const previousInstance = serverInstance;
+  button.disabled = true;
+  setModel("busy", "Restarting", "Waiting for the app server to come back up.");
+  document.dispatchEvent(new CustomEvent("agent-state", { detail: { ready: false } }));
+  try {
+    await api.restart();
+  } catch (error) {
+    // A dropped connection here is expected — the server may exit before the
+    // response lands. Only a real refusal (409 busy) should stop us.
+    if (error?.status === 409) {
+      button.disabled = false;
+      toast(`${error.message} ${error.hint ?? ""}`.trim(), { tone: "error" });
+      pollHealth();
+      return;
+    }
+  }
+  // Wait for a DIFFERENT server, not merely a reachable one. The outgoing
+  // process keeps answering for a moment after it accepts the request, so
+  // "health responds" would reload us onto a socket that is about to close.
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    try {
+      const health = await api.health();
+      if (!previousInstance || health.instance !== previousInstance) {
+        location.reload();
+        return;
+      }
+    } catch { /* down between the two processes; keep waiting */ }
+  }
+  button.disabled = false;
+  setModel("warn", "Restart timed out", "The server didn't come back. Check data/restart.log.");
+}
+
+$("#btn-restart").addEventListener("click", restartApp);
 
 document.addEventListener("kb-state", (event) => { $("#chip-kb").hidden = !event.detail.stale; });
 $("#chip-kb").addEventListener("click", () => { location.hash = "#/notebook"; });
