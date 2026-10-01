@@ -612,6 +612,44 @@
   .modal-inner { --cut: 16px; padding: 24px; display: grid; gap: 18px; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 
+  /* ---- boot / warm-up curtain ----
+     Rendered VISIBLE in the markup rather than opened by script. A request
+     landing before warm-up finishes blocks on it, so the app has to be
+     unusable until then — and anything JS has to switch on would let the
+     board paint interactive first, which is exactly the flash this prevents.
+     z-index clears the topbar (30), toasts (50) and skip link (60). The one
+     thing above it is a native dialog's top layer, and none can be open
+     before the app has booted. */
+  .boot {
+    position: fixed; inset: 0; z-index: 100;
+    display: grid; place-items: center; padding: 24px;
+    background: var(--color-stage-950);
+    transition: opacity 220ms ease-out;
+  }
+  .boot[hidden] { display: none; }
+  /* Faded out rather than hidden outright so the board does not snap in. The
+     class is removed on transitionend; `hidden` is what actually takes it out
+     of the layout and the a11y tree. */
+  .boot.is-done { opacity: 0; pointer-events: none; }
+  .boot-inner { display: grid; justify-items: center; gap: 18px; max-width: 420px; text-align: center; }
+  .boot-mark { width: 54px; height: 54px; color: var(--color-gold); animation: lamp-pulse 1.8s ease-in-out infinite; }
+  .boot-title { font: 700 1.5rem/1 var(--font-display); letter-spacing: .04em; text-transform: uppercase; color: var(--color-ink); }
+  .boot-msg { font-size: var(--text-sm); color: var(--color-ink-2); min-height: 1.2em; }
+  .boot-steps { display: grid; gap: 8px; justify-items: start; margin: 0 auto; padding: 0; list-style: none; }
+  .boot-steps li { display: flex; align-items: center; gap: 10px; font-size: var(--text-sm); color: var(--color-ink-3); }
+  .boot-steps li[data-state="done"] { color: var(--color-ink); }
+  .boot-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--color-ink-4); }
+  li[data-state="busy"] .boot-dot { background: var(--color-gold); animation: lamp-pulse 1.2s ease-in-out infinite; }
+  li[data-state="done"] .boot-dot { background: var(--color-ok); }
+  /* Indeterminate on purpose. Warm-up has two unordered async steps and no
+     measurable fraction, so a percentage bar would be inventing a number. */
+  .boot-bar { position: relative; width: 220px; height: 3px; overflow: hidden; background: var(--color-stage-700); }
+  .boot-bar > i { position: absolute; inset: 0 auto 0 0; width: 40%; background: var(--color-gold); animation: boot-sweep 1.4s ease-in-out infinite; }
+  @keyframes boot-sweep { from { translate: -100% 0; } to { translate: 350% 0; } }
+  .boot-hint { font-size: var(--text-sm); color: var(--color-ink-4); }
+  .boot[data-tone="error"] .boot-mark { color: var(--color-warn); animation: none; }
+  .boot[data-tone="error"] .boot-bar { display: none; }
+
   /* ---- toasts ---- */
   .toasts { position: fixed; left: 20px; bottom: 20px; z-index: 50; display: grid; gap: 8px; width: min(420px, calc(100vw - 40px)); pointer-events: none; }
   .toast { --cut: 8px; --edge: var(--color-steel); --fill: var(--color-stage-700); pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 12px 14px; font-size: var(--text-sm); line-height: 1.4; box-shadow: 0 8px 20px rgb(0 0 0 / .35); animation: reveal 180ms cubic-bezier(.16, 1, .3, 1) both; }

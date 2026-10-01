@@ -44,6 +44,55 @@ function setModel(tone, text, title) {
 // pre-fetching the current stats takes ~20s after launch, and a recommendation
 // requested before that finishes blocks on it — so the state has to be visible
 // rather than something the user discovers by waiting.
+// ------------------------------------------------------------ boot curtain
+// Covers the app until warm-up finishes. Pointer events are blocked by the
+// overlay itself; `inert` is what stops a keyboard user tabbing underneath it,
+// which a full-bleed div alone does not prevent.
+const boot = $("#boot");
+let bootVisible = true;
+
+function setBoot({ message, hint, notes, stats, tone }) {
+  if (!bootVisible) return;
+  if (message != null) $("#boot-msg").textContent = message;
+  if (hint != null) $("#boot-hint").textContent = hint;
+  if (tone != null) boot.dataset.tone = tone; else delete boot.dataset.tone;
+  const step = (name, done) => {
+    const node = boot.querySelector(`[data-step="${name}"]`);
+    if (node) node.dataset.state = done ? "done" : "busy";
+  };
+  if (notes != null) step("notes", notes);
+  if (stats != null) step("stats", stats);
+}
+
+function showBoot({ message, hint, steps = true, tone = null }) {
+  bootVisible = true;
+  boot.hidden = false;
+  boot.classList.remove("is-done");
+  $("#boot-steps").hidden = !steps;
+  for (const node of document.querySelectorAll(".topbar, #main")) node.inert = true;
+  setBoot({ message, hint, tone });
+}
+
+function hideBoot() {
+  if (!bootVisible) return;
+  bootVisible = false;
+  for (const node of document.querySelectorAll(".topbar, #main")) node.inert = false;
+  boot.classList.add("is-done");
+  // `hidden` is what removes it from the layout and the a11y tree; the class
+  // only fades it. Guarded on the event target because a child's own
+  // transition would otherwise hide the curtain early.
+  boot.addEventListener("transitionend", function done(event) {
+    if (event.target !== boot) return;
+    boot.removeEventListener("transitionend", done);
+    boot.hidden = true;
+  });
+  // transitionend never fires if the element is already at the target opacity
+  // (reduced-motion shortens transitions to 1ms), so do not rely on it alone.
+  setTimeout(() => { if (!bootVisible) boot.hidden = true; }, 400);
+}
+
+for (const node of document.querySelectorAll(".topbar, #main")) node.inert = true;
+
 let serverInstance = null;
 // Set once the user deliberately shuts the server down. Without it the poll
 // below would keep firing against a socket that is gone and report the
@@ -68,10 +117,30 @@ async function pollHealth() {
         .filter(Boolean).join(" and ");
       setModel("busy", "Warming up", `Loading the ${waiting}. This takes about 20 seconds after launch.`);
     }
+    // The curtain tracks the same two flags the chip does, so it names what is
+    // still outstanding instead of spinning anonymously.
+    setBoot({
+      message: ready ? "Ready" : "Warming up",
+      notes: health.notes_ready,
+      stats: health.stats_ready,
+    });
+    // Lifted on warm-up alone, deliberately NOT on jev_configured: a missing
+    // API key is a permanent condition, and holding the curtain up for it
+    // would lock the user out of the notebook and Meta-Watcher, which work
+    // without Jev. The header chip reports the key separately.
+    if (ready) hideBoot();
     document.dispatchEvent(new CustomEvent("agent-state",
       { detail: { ready: ready && health.jev_configured } }));
   } catch {
     setModel("warn", "Server unreachable", "The Draft Copilot server isn't responding. Restart run_dashboard.bat.");
+    // Only while booting. Once the app is up, a transient health failure is
+    // already reported by the chip and should not throw a curtain over work
+    // in progress.
+    setBoot({
+      message: "Can't reach the app server",
+      hint: "It may still be starting. If this persists, run run_dashboard.bat again.",
+      tone: "error",
+    });
     document.dispatchEvent(new CustomEvent("agent-state", { detail: { ready: false } }));
   }
   // Poll tightly while warming so the UI unlocks promptly, then back off.
@@ -91,6 +160,15 @@ async function restartApp() {
   const previousInstance = serverInstance;
   button.disabled = true;
   setModel("busy", "Restarting", "Waiting for the app server to come back up.");
+  // Curtain goes up immediately. The reload below lands on a server that is
+  // still warming, so without this the board would be interactive for the
+  // several seconds it takes the replacement to become usable. Steps are
+  // hidden until the new process starts reporting them.
+  showBoot({
+    message: "Restarting the app server",
+    hint: "The replacement waits for this one to release the port.",
+    steps: false,
+  });
   document.dispatchEvent(new CustomEvent("agent-state", { detail: { ready: false } }));
   try {
     await api.restart();
@@ -99,6 +177,7 @@ async function restartApp() {
     // response lands. Only a real refusal (409 busy) should stop us.
     if (error?.status === 409) {
       button.disabled = false;
+      hideBoot();  // refused, so the app is still live and must stay usable
       toast(`${error.message} ${error.hint ?? ""}`.trim(), { tone: "error" });
       pollHealth();
       return;
@@ -120,6 +199,16 @@ async function restartApp() {
   }
   button.disabled = false;
   setModel("warn", "Restart timed out", "The server didn't come back. Check data/restart.log.");
+  // Left the curtain up here on the first pass, which stranded the user behind
+  // a "Restarting" screen with no way forward. Report it on the curtain and
+  // keep polling — if the replacement does eventually answer, pollHealth lifts
+  // it on its own.
+  setBoot({
+    message: "The server didn't come back",
+    hint: "Check data/restart.log, or run run_dashboard.bat again.",
+    tone: "error",
+  });
+  pollHealth();
 }
 
 // --------------------------------------------------------------- shutdown
@@ -165,7 +254,14 @@ async function shutdownApp() {
       await api.health();
     } catch {
       setModel("idle", "Stopped", "The app server has shut down. Run run_dashboard.bat to start it again.");
-      toast("App server stopped. This page is no longer live.", { tone: "ok" });
+      // Curtain back up: nothing on the page works now, and a board that still
+      // looks live invites clicks that fail with network errors.
+      showBoot({
+        message: "App server stopped",
+        hint: "Run run_dashboard.bat to start it again.",
+        steps: false,
+        tone: "error",
+      });
       return;
     }
   }

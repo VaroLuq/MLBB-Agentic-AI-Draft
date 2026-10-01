@@ -13,6 +13,27 @@
   <script type="module" src="js/main.js"></script>
 </head>
 <body>
+  <!-- Visible by default and removed by main.js once /api/health reports
+       ready. Declared in the markup rather than injected so the board is never
+       interactive for a frame: a recommendation requested before warm-up
+       finishes just blocks on it. -->
+  <div id="boot" class="boot" role="status" aria-live="polite">
+    <div class="boot-inner">
+      <svg class="boot-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M16 2.5 28 9.25v13.5L16 29.5 4 22.75V9.25z" stroke="currentColor" stroke-width="2.2"/>
+        <path d="m11 16.5 3.5 3.5 7-8" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <p class="boot-title">Draft Copilot</p>
+      <p id="boot-msg" class="boot-msg">Starting up…</p>
+      <ul id="boot-steps" class="boot-steps">
+        <li data-step="notes" data-state="busy"><span class="boot-dot"></span>Loading the note index</li>
+        <li data-step="stats" data-state="busy"><span class="boot-dot"></span>Fetching current live stats</li>
+      </ul>
+      <div class="boot-bar" aria-hidden="true"><i></i></div>
+      <p id="boot-hint" class="boot-hint">This takes about 20 seconds on a cold start.</p>
+    </div>
+  </div>
+
   <a class="skip" href="#main">Skip to content</a>
 
   <header class="topbar">
