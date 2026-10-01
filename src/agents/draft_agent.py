@@ -45,8 +45,11 @@ class DraftState(TypedDict, total=False):
     lane_filtered_stats_text: str | None
     lane_filtered_aggregate: list[dict]
     parsed_recommendation: dict | None
+    gated_out: list[dict]
     jev_raw: dict | None
     jev_error: str | None
+    jev_gate_raw: dict | None
+    jev_gate_error: str | None
 
 
 # --- Nodes ---
@@ -477,6 +480,32 @@ def evaluate_candidates(state: DraftState) -> DraftState:
     result = jev_client.evaluate_candidates(state)
     state["jev_raw"] = result.get("raw")
     state["jev_error"] = result.get("error")
+    # The gate is a SECOND Jev request with its own minimal state. Its failure
+    # is not fatal — apply_gates fails open, so an outage degrades to pre-gate
+    # behaviour — but it must not be invisible, or a draft silently stops being
+    # filtered and nothing anywhere says so.
+    state["jev_gate_raw"] = result.get("gate_raw")
+    state["jev_gate_error"] = result.get("gate_error")
+
+    # Note-admitted heroes the relevance gate dropped. Carried into state and
+    # surfaced read-only, NOT silently discarded: `_filtered_out()` was deleted
+    # from this project on the grounds that filtering had all moved ahead of
+    # evaluation, so nothing could ever be stripped after scoring. The gate puts
+    # a post-scoring filter back, which makes "why isn't Edith in the list?"
+    # answerable only if the answer is recorded here.
+    state["gated_out"] = [
+        {
+            "hero": row["hero"],
+            "gate": row.get("gate"),
+            "tier": row.get("tier"),
+            "score": row.get("score"),
+            "notes": [
+                n.get("hero_name")
+                for n in (_aggregate_row(state, row["hero"]).get("notes") or [])
+            ],
+        }
+        for row in (result.get("rejected") or [])
+    ]
 
     rows = result.get("rows") or []
     if not rows:

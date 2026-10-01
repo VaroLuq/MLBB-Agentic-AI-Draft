@@ -215,6 +215,12 @@ behaviour, that text is stale — the loop is gone.
   "Edith as an Esmeralda Counter" note argues AGAINST Esmeralda but
   still raises her `note_support`. The note text is now in Jev's state
   so it can in principle read the direction; the scalar alone cannot.
+  MITIGATED 2026-10-01 for ADMISSION but not for scoring: the Noul
+  relevance gate (see its own bullet below) rejects a note-admitted hero
+  whose note argues against them. `mentions_hero` is still direction-
+  blind and `note_support` still rises for a hero a note attacks, so a
+  LIVE_STATS candidate can still be credited by a note that opposes it —
+  only note-ADMITTED rows pass through the gate.
 - **Note-based pool admission** (`_admit_note_heroes` in
   `draft_agent.py`, 2026-09-29) — closes a one-way street between notes
   and candidates. `lane_filtered_aggregate` was populated ONLY from
@@ -262,7 +268,64 @@ behaviour, that text is stale — the loop is gone.
   VERIFIED 2026-09-29 across all five lanes, plus: no-lane and
   bogus-lane drafts skip admission; a banned Lukas and an ally Lukas
   are both correctly not admitted; the empty-pool guard still returns
-  `({}, {})`.
+  `({}, {})` (now a 3-tuple, see the gate bullet).
+- **Noul relevance gate** (`jev_client.parse_gates` / `apply_gates`,
+  2026-10-01) — the direction guard on note admission. `mentions_hero`
+  matches a name without reading what the sentence SAYS about it, so
+  admission alone put heroes in the pool that their own note argues
+  against. Two real cases, both from the shipped corpus:
+  - "Edith as an Esmeralda Counter" admitted Edith whenever Esmeralda
+    was the player's OWN pick. Edith is then a hero they would rather
+    not face, not one to pick — and she was being rated Solid.
+  - the Lapu-Lapu note ("Counters to Lapu-Lapu is Esmeralda...") named
+    Lapu-Lapu, so it admitted LAPU-LAPU himself whenever he was not
+    already drafted. The note is about beating him.
+  Each note-admitted row gets a `noul` question ("does this note
+  actually recommend this hero for the PLAYER'S team in THIS draft?")
+  alongside its `Score`. Survivors keep their place; the rest are
+  dropped. `live_stats` rows are NOT gated — they carry objective API
+  evidence that they bear on this draft, and gating a fact behind a
+  probability adds nothing.
+  ONE ROUND TRIP, and this is the point: the gate rides in the SAME
+  request as the scoring, not a prior one. Jev answers every question in
+  one parallel pass, so gating first would cost a second round trip
+  while gating alongside costs only a few discarded Score answers.
+  Wasting an answer is far cheaper than another network hop. Verified in
+  the payload: 3 `score` + 2 `noul` questions in one request.
+  FAILS OPEN, deliberately. A hero with no usable gate verdict is KEPT;
+  only a row that was gated AND came back under threshold is dropped.
+  A blip, a renamed response field or a declined answer would otherwise
+  silently delete a hero the user deliberately wrote a note about, and
+  silent deletion is the worst failure available here — the symptom is
+  a hero quietly missing, with nothing saying why. Tested: no verdict,
+  `noul: null` and `noul: true` (the bool trap) all keep the hero.
+  Threshold `NOUL_GATE_THRESHOLD` = 0.50, env `JEV_GATE_THRESHOLD`.
+  Exactly-at-threshold is KEPT (`>=`), i.e. ties resolve toward not
+  dropping. See the empirical entry for why 0.50 and not higher.
+  `build_payload()` now returns a THREE-tuple
+  `(payload, key_to_hero, gate_to_hero)`. One slug per hero is reused
+  for both question keys — calling `_sanitise` twice would find the name
+  already `taken` and return "Hero_2" for the second, silently
+  decoupling a gate from the row it gates.
+  REJECTIONS ARE SURFACED, not discarded: `state["gated_out"]` ->
+  `/api/recommend` -> the Live stats diagnostics tab, each with its gate
+  probability AND the tier it would have been rated. That pairing is the
+  whole point — "scored Solid but gated at 0.08" answers "why isn't
+  Edith in the list?", and a bare absence does not. NOTE this puts back
+  the post-scoring filtering that `_filtered_out()` was deleted for; see
+  the Response contract bullet.
+  VERIFIED live 2026-10-01 end-to-end, both directions, in the
+  production state shape: Esmeralda as ally -> Edith gate 0.08, dropped
+  (would have rated Solid); Esmeralda as enemy -> Edith kept, Priority
+  2.73. In the second run the gate ALSO dropped Lapu-Lapu at 0.09
+  unprompted, which is the stronger evidence: it generalised to a note
+  nobody designed it against.
+  COST went from ~$0.0001 to ~$0.00015-0.00027 per recommendation —
+  mostly because admission grew the pool, not because of the gate. The
+  gate fires on nearly every recommendation now, since the general
+  PICK/BAN note applies to any draft. NOT MEASURED: latency. Jev's wall
+  clock swings 844-3266ms on identical payloads, so a before/after at
+  n=1 says nothing; the one-round-trip claim is structural, not timed.
 - **Jev decision node** (`src/agents/jev_client.py`, 2026-09-23) —
   replaced qwen2.5:3b entirely. Jev is a third-party "System 1"
   decision model (TypeSafe AI) reached at
@@ -526,7 +589,14 @@ behaviour, that text is stale — the loop is gone.
     no longer returns `parse_error`, `raw_llm_output`, `repair_attempts`
     or `filtered_out`; it returns `jev_error` and `jev_raw`.
     `_filtered_out()` was deleted outright — filtering now happens BEFORE
-    evaluation, so there is never a stripped pick to report. Each
+    evaluation, so there is never a stripped pick to report.
+    THAT REASONING EXPIRED 2026-10-01. The Noul relevance gate is a
+    POST-scoring filter, so a pick can be stripped after evaluation
+    again. It is reported as `gated_out` (+ `gate_threshold`) rather than
+    by reviving `_filtered_out()`, because the two answer different
+    questions: the old one listed heroes an LLM named illegally, this one
+    lists heroes the pipeline admitted and then judged irrelevant, and it
+    carries the gate probability and the tier they would have had. Each
     recommendation carries `{hero, tier, tier_index, score, confidence,
     probabilities, rationale}` instead of `{hero, priority_score,
     rationale}`. In the UI, `meter(rec.priority_score)` became
@@ -565,6 +635,14 @@ behaviour, that text is stale — the loop is gone.
   - NOTE the eval axis shifted: Jev emits no tokens, so "hallucination"
     is not its failure mode. Miscalibration is. Don't port the old
     factuality framing onto it.
+  - BLIND SPOT as of 2026-10-01: `jev_eval.py` measures the `Score`
+    questions only and knows nothing about the Noul relevance gate, which
+    can now DROP candidates. Gate stability is a distinct failure mode —
+    a hero admitted on one run and gated on the next would read as
+    instability in the recommendation list while every Score was stable.
+    Measured jitter is small (0.82 vs 0.78 on the same case) but the
+    threshold is a cliff, so a case sitting near 0.50 would flip. Add
+    gate probabilities to the repeat comparison when this is next touched.
   - `reliability_eval.py` is SUPERSEDED and marked DO NOT RUN at the top
     of the file. It still imports and still runs, which is the danger:
     every state key it reads is gone, so it would report 0 repair
@@ -948,6 +1026,41 @@ behaviour, that text is stale — the loop is gone.
   outside that noise band, i.e. the PROSE made no measurable difference
   and the scalar carried the signal. Single scenario, so inconclusive
   rather than settled; the sharper test is the adversarial Edith note.
+  SCOPED 2026-10-01, and the scope matters: that finding holds for a
+  SCORE question and does NOT generalise. The adversarial Edith test was
+  finally run, as a `noul`, and the prose drove it completely — 0.14 vs
+  0.91 on the same note and hero with only the side changed. Mechanism:
+  on a Score the numeric axes dominate and the text is a footnote,
+  whereas a Noul whose only subject is the note has nothing else to read.
+  So "Jev ignores note prose" is false as a general claim. Do not cite
+  the 2.99 -> 2.97 result as a reason not to put text in front of Jev;
+  cite it as a reason not to expect text to move a NUMERIC rating.
+- NOUL GATE CALIBRATION (`misc/jev_noul_probe.py`, 2026-10-01, 3 calls
+  per run, 2 runs, $0.00015 total). The experiment that decided whether
+  to build the relevance gate at all, run BEFORE building it:
+  | case | expect | run 1 | run 2 |
+  |---|---|---|---|
+  | Edith, Esmeralda is OUR pick | no | 0.14 | 0.14 |
+  | Edith, Esmeralda is THEIR pick | yes | 0.90 | 0.91 |
+  | Lukas, general PICK/BAN note | yes | 0.82 | 0.78 |
+  DIRECTION GAP +0.77 on the same note and the same hero with only the
+  SIDE changed — most of the available range, not a margin needing a
+  finely-tuned threshold. Case 3 is the regression guard: if the gate
+  ate the general PICK/BAN note, admission would be worse than useless.
+  THRESHOLD 0.50 was chosen from this and NOT higher on purpose: jitter
+  is real (Lukas 0.82 then 0.78), so a 0.70 cut would leave the note the
+  user most wants honoured 0.08 from rejection. Caution here means NOT
+  dropping heroes. n=2 per case and Lukas is the only sample of an
+  imperative-but-unexplained note, so do not move the threshold off 0.50
+  without more cases.
+  NOUL WIRE FORMAT, undocumented and discovered by this probe: the
+  request type string is `"noul"` (JEV.md describes the primitive but
+  gives no wire name, and every example in `misc/` uses `score`). The
+  answer is `{"type": "noul", "noul": <float>}` — the field is named
+  after the primitive, and there is **NO `confidence` key**, unlike
+  Score. A Noul gate therefore thresholds the raw probability directly;
+  there is no second signal to weigh, which is worth knowing before
+  designing any policy that assumes one.
 - CANDIDATE POOL SHAPE (21 rows, 6 scenarios, 2026-09-23). These
   constrain any rubric and were measured before writing one:
   `win_rate_delta` -0.085..+0.086, `counter_strength` 0..0.049 (p50

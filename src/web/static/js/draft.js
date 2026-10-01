@@ -496,12 +496,40 @@ function notesText(data) {
   })).join("\n\n");
 }
 
+// Note-admitted heroes the Jev relevance gate dropped. This exists because the
+// candidate table above still lists them — they were admitted, then scored,
+// then rejected — so without this the table and the recommendations disagree
+// with no explanation. The tier is shown deliberately: "scored Solid but gated
+// at 0.14" is an answer to "why isn't Edith here", and an absence is not.
+function gatedText(data) {
+  const rows = data.gated_out;
+  if (!rows?.length) return "";
+  const threshold = typeof data.gate_threshold === "number" ? data.gate_threshold : null;
+  const cut = threshold == null ? "" : ` (below ${threshold.toFixed(2)})`;
+  return [
+    `\nDropped by the note-relevance gate${cut}:`,
+    ...rows.map((r) => {
+      const notes = r.notes?.filter(Boolean).join(", ");
+      return `  ${r.name ?? r.hero}  gate ${r.gate == null ? "—" : r.gate.toFixed(3)}` +
+        `  would have rated ${r.tier ?? "—"}` + (notes ? `  from ${notes} notes` : "");
+    }),
+  ].join("\n");
+}
+
 function diagnostics(data, forceOpen = false) {
   const open = diagOpen || forceOpen;
   const tabs = [
-    { id: "live", label: "Live stats", text: [data.live_stats_summary, data.lane_filtered_stats && `\nLane-filtered:\n${data.lane_filtered_stats}`, aggregateText(data.lane_filtered_aggregate)].filter(Boolean).join("\n") || "No live stats were gathered." },
+    { id: "live", label: "Live stats", text: [data.live_stats_summary, data.lane_filtered_stats && `\nLane-filtered:\n${data.lane_filtered_stats}`, aggregateText(data.lane_filtered_aggregate), gatedText(data)].filter(Boolean).join("\n") || "No live stats were gathered." },
     { id: "notes", label: "Notes retrieved", text: notesText(data) },
-    { id: "raw", label: "Jev response", text: [data.jev_error && `Error:\n${data.jev_error}\n`, data.jev_raw ? JSON.stringify(data.jev_raw, null, 2) : "No response recorded."].filter(Boolean).join("\n") },
+    // Two Jev requests now: scoring, and the relevance gate against its own
+    // minimal state. Both are shown — the gate fails open, so an error here
+    // means the draft silently stopped being filtered.
+    { id: "raw", label: "Jev response", text: [
+      data.jev_error && `Error:\n${data.jev_error}\n`,
+      data.jev_raw ? JSON.stringify(data.jev_raw, null, 2) : "No response recorded.",
+      data.jev_gate_error && `\n--- relevance gate FAILED (candidates were not filtered) ---\n${data.jev_gate_error}`,
+      data.jev_gate_raw && `\n--- relevance gate ---\n${JSON.stringify(data.jev_gate_raw, null, 2)}`,
+    ].filter(Boolean).join("\n") },
   ];
   const active = tabs.find((t) => t.id === diagTab) || tabs[0];
 

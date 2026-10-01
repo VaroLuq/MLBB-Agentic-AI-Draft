@@ -12,6 +12,7 @@ Nothing here decides anything. Ranking policy stays in the caller.
 
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from dotenv import load_dotenv
@@ -25,6 +26,51 @@ DEFAULT_TIMEOUT = 30
 # Ascending: index 0 is worst. The caller relies on that ordering, and Jev's
 # rubric is documented as ordered, so do not shuffle these.
 TIER_LEVELS = ["Fallback", "Marginal", "Solid", "Priority"]
+
+
+def _gate_threshold(default: float = 0.50) -> float:
+    """Minimum Noul probability for a note-admitted hero to survive the gate.
+
+    0.50 was chosen from the three-call probe (misc/jev_noul_probe.py, measured
+    2026-10-01): the adversarial Edith case scored 0.14 and the two cases that
+    must pass scored 0.78-0.91, so 0.50 sits centred in a 0.64-wide gap with
+    ~0.28 of headroom below the weakest true positive. Deliberately NOT set
+    higher "to be safe" — run-to-run jitter is real (Lukas read 0.82 then 0.78),
+    and a 0.70 cut would leave the note the user most wants honoured sitting
+    0.08 from rejection. Being cautious here means NOT dropping heroes.
+    """
+    try:
+        value = float(os.getenv("JEV_GATE_THRESHOLD", default))
+    except (TypeError, ValueError):
+        return default
+    return value if 0.0 <= value <= 1.0 else default
+
+
+NOUL_GATE_THRESHOLD = _gate_threshold()
+
+# Wording carried over almost verbatim from the probe that validated it, which
+# measured a 0.77 separation on the same note and hero with only the SIDE
+# changed. The policy lives in the question and the facts live in the state;
+# Jev's job is to notice whether the hero a note argues against sits in
+# ally_picks or enemy_picks. Do not "simplify" that inference out of the
+# wording — it is the entire mechanism.
+NOUL_TEMPLATE = """\
+'{hero}' is under consideration as a pick FOR THE PLAYER'S OWN TEAM in the \
+'{lane}' lane. It entered the candidate list ONLY because the player's own \
+strategy notes name it — see the 'notes' field of candidates['{hero}']. The \
+live match data holds no counter or synergy record for it in this draft.
+
+Decide whether those notes actually recommend '{hero}' as a pick for the \
+PLAYER'S team in THIS draft.
+
+Answer yes if a note advises picking this hero, or names it as a counter to a \
+hero listed in 'draft.enemy_picks'.
+Answer no if the notes name this hero only as a threat to the player's own \
+side — for instance as a counter to a hero listed in 'draft.ally_picks' — or \
+merely mention it without recommending it for a draft like this one. A hero a \
+note frames as beating the player's OWN pick is one they would rather not \
+face, not one they should pick.\
+"""
 
 # Calibration reference handed to Jev as part of the state so it knows what
 # counts as a big number on our scales. Measured 2026-09-23 over 21 candidate
@@ -133,12 +179,15 @@ def _sanitise(name: str, taken: set[str]) -> str:
 
 
 def build_payload(state: dict) -> tuple[dict, dict[str, str]]:
-    """Build the request body and the question-key -> hero-name map.
+    """Build the scoring request body and the question-key -> hero-name map.
 
     Returns `({}, {})` when there is nothing to evaluate. That is a real case,
     not an error: a draft can produce an empty aggregate when no counter or
     synergy hero overlaps the lane roster, and sending zero questions would be
     a pointless request.
+
+    The relevance gate is NOT part of this request — see build_gate_payload for
+    why it needs a state of its own.
     """
     candidates = state.get("lane_filtered_aggregate") or []
     if not candidates:
@@ -198,6 +247,84 @@ def build_payload(state: dict) -> tuple[dict, dict[str, str]]:
     return payload, key_to_hero
 
 
+def build_gate_payload(state: dict) -> tuple[dict, dict[str, str]]:
+    """Build the relevance-gate request: a MINIMAL state, deliberately separate.
+
+    Returns `({}, {})` when nothing was note-admitted, which is the common case
+    for a draft whose notes name no lane-eligible hero.
+
+    WHY A SECOND REQUEST. The gate originally rode along with the scoring
+    questions, since Jev answers every question in one parallel pass and that
+    looked free. It was not: measured 2026-10-01 by ablation
+    (`misc/jev_gate_ablation.py`, then `misc/jev_gate_state_ablation.py`), a
+    note-admitted hero that scores 0.80 against a minimal state scores 0.35
+    against the scoring state. The regression is entirely CONTEXT DILUTION, and
+    the wording is innocent — holding the state fixed, probe vs shipped wording
+    moved the answer +0.02/-0.07, while holding the wording fixed, flat vs
+    shipped state moved it -0.32/-0.41. Removing the suspected "for a draft
+    like this one" clause made it slightly WORSE, not better.
+    Where the 0.44 gap lives, each measured by one edit to the real state:
+      - other candidates present      0.49 of the gap
+      - the hero's own zero metrics   0.33
+      - the `scales` block alone      0.13 (measured on the flat state)
+      - note addressability           0.05  <- NOT the problem. Duplicating the
+        note into a top-level field recovered almost nothing, so Jev reads
+        candidates['<hero>'].notes perfectly well.
+    The giveaway that this is dilution rather than missing information: adding a
+    top-level copy of the note to the already-trimmed state made the answer
+    WORSE (0.57 -> 0.49). More content costs accuracy even when the content is
+    relevant. So the only fix is to ask the question against less state, and
+    Jev takes one state per request.
+    DO NOT "optimise" this back into build_payload. It would restore one round
+    trip and silently return the gate to a signal that sits below its own
+    threshold.
+
+    The gates still batch among THEMSELVES, so this is 2 requests per
+    recommendation regardless of pool size, not N+1. Note the batching is not
+    free either: Lukas reads ~0.80 alone and ~0.67 beside one other gated hero.
+    That is the accepted ceiling — per-hero requests would be N+1.
+    """
+    candidates = state.get("lane_filtered_aggregate") or []
+    gated = [row for row in candidates if row.get("source") == "note"]
+    if not gated:
+        return {}, {}
+
+    lane = state.get("role_needed") or "any"
+    questions, gate_to_hero, taken = {}, {}, set()
+    notes_by_hero = {}
+    for row in gated:
+        hero = row["name"]
+        # Only the note text, and only for heroes actually under review. No
+        # scales, no numeric metrics, no live_stats candidates — each of those
+        # was measured to cost the answer.
+        notes_by_hero[hero] = {
+            "notes": [n.get("text", "") for n in (row.get("notes") or [])]
+        }
+        key = f"gate_{_sanitise(hero, taken)}"
+        gate_to_hero[key] = hero
+        questions[key] = {
+            "type": "noul",
+            "instructions": NOUL_TEMPLATE.format(hero=hero, lane=lane),
+        }
+
+    payload = {
+        "model": JEV_MODEL,
+        "state": {
+            # The draft is what makes the direction judgement possible at all —
+            # the same note flips verdict depending on whether the hero it
+            # argues against sits in ally_picks or enemy_picks.
+            "draft": {
+                "lane": lane,
+                "ally_picks": state.get("ally_picks") or [],
+                "enemy_picks": state.get("enemy_picks") or [],
+            },
+            "candidates": notes_by_hero,
+        },
+        "questions": questions,
+    }
+    return payload, gate_to_hero
+
+
 def parse_answers(response: dict, key_to_hero: dict[str, str]) -> list[dict]:
     """Normalise Jev's answers into one row per hero.
 
@@ -248,6 +375,62 @@ def parse_answers(response: dict, key_to_hero: dict[str, str]) -> list[dict]:
     # Rank by the continuous score, most viable first; unanswered rows last.
     rows.sort(key=lambda r: (r["score"] is None, -(r["score"] or 0.0)))
     return rows
+
+
+def parse_gates(response: dict, gate_to_hero: dict[str, str]) -> dict[str, float]:
+    """Hero -> relevance probability, for the note-admitted rows that were gated.
+
+    A hero is ABSENT from the result when no usable probability came back, and
+    callers must read that as "no verdict" rather than as a low one — see
+    apply_gates, which fails open.
+
+    Shape confirmed live 2026-10-01: the answer is
+    `{"type": "noul", "noul": <float>}`. The field is named after the primitive,
+    and unlike Score there is NO `confidence` key, so the probability is the
+    only signal and is thresholded directly. Alternative spellings are still
+    tried because the shape is pinned by exactly one probe.
+    """
+    answers = (response or {}).get("answers") or {}
+    gates: dict[str, float] = {}
+    for key, hero in gate_to_hero.items():
+        answer = answers.get(key) or {}
+        for field in ("noul", "probability", "value", "score"):
+            value = answer.get(field)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                gates[hero] = float(value)
+                break
+    return gates
+
+
+def apply_gates(
+    rows: list[dict],
+    gates: dict[str, float],
+    threshold: float = NOUL_GATE_THRESHOLD,
+) -> tuple[list[dict], list[dict]]:
+    """Split scored rows into (kept, rejected) on the relevance gate.
+
+    FAILS OPEN, deliberately: a hero with no gate verdict is KEPT. Only rows
+    that were gated AND came back under the threshold are dropped. A network
+    blip, a renamed response field or an answer Jev declined to give would
+    otherwise silently delete candidates the user explicitly wrote a note about,
+    and silent deletion is the worst failure available here — the symptom is a
+    hero quietly missing from a list, with nothing anywhere saying why.
+
+    Rejected rows keep their tier and score alongside `gate`, so the
+    diagnostics panel can show what the pick WOULD have been rated. That
+    matters: the question this answers is "why isn't Edith in the list", and
+    "she scored Solid but the gate read 0.14" is an answer, while a bare
+    absence is not.
+    """
+    kept, rejected = [], []
+    for row in rows:
+        probability = gates.get(row["hero"])
+        if probability is None:
+            kept.append(row)
+            continue
+        row = {**row, "gate": round(probability, 3)}
+        (rejected if probability < threshold else kept).append(row)
+    return kept, rejected
 
 
 def _magnitude(value: float, scale: dict) -> str:
@@ -337,17 +520,13 @@ def summarise(recommendations: list[dict], lane: str | None) -> str:
     )
 
 
-def evaluate_candidates(state: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
-    """POST one batched evaluation. Returns {rows, raw, payload, error}."""
-    payload, key_to_hero = build_payload(state)
-    if not payload:
-        return {"rows": [], "raw": None, "payload": None, "error": None}
+def _post(payload: dict, api_key: str, timeout: int) -> tuple[dict | None, str | None]:
+    """POST one payload. Returns (body, error) — never raises.
 
-    api_key = os.getenv("OPEN_JEV_KEY")
-    if not api_key:
-        return {"rows": [], "raw": None, "payload": payload,
-                "error": "OPEN_JEV_KEY is not set"}
-
+    Errors are RETURNED rather than raised because both calls run in a thread
+    pool below, and an exception escaping a worker loses which of the two
+    requests it belonged to.
+    """
     try:
         response = requests.post(
             JEV_URL,
@@ -357,16 +536,66 @@ def evaluate_candidates(state: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
             timeout=timeout,
         )
     except requests.RequestException as e:
-        return {"rows": [], "raw": None, "payload": payload,
-                "error": f"{type(e).__name__}: {e}"}
-
+        return None, f"{type(e).__name__}: {e}"
     if response.status_code != 200:
-        return {"rows": [], "raw": response.text, "payload": payload,
-                "error": f"HTTP {response.status_code}: {response.text[:300]}"}
+        return None, f"HTTP {response.status_code}: {response.text[:300]}"
+    try:
+        return response.json(), None
+    except ValueError as e:
+        return None, f"malformed JSON: {e}"
 
-    body = response.json()
-    return {"rows": parse_answers(body, key_to_hero), "raw": body,
-            "payload": payload, "error": None}
+
+def evaluate_candidates(state: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
+    """Score the pool and gate the note-admitted rows.
+
+    Returns {rows, rejected, raw, gate_raw, payload, gate_payload, error,
+    gate_error}. `rejected` holds note-admitted candidates the relevance gate
+    dropped; it is always present and empty when nothing was gated.
+
+    TWO REQUESTS, RUN CONCURRENTLY. The gate needs its own minimal state (see
+    build_gate_payload), so it cannot share the scoring request. But the two are
+    independent — neither's input depends on the other's output — so they go out
+    together and the added wall clock is max(a, b) rather than a + b. Same
+    argument as the relation fan-out in gather_live_stats, and it is what makes
+    the correct-but-separate gate affordable.
+    """
+    payload, key_to_hero = build_payload(state)
+    if not payload:
+        return {"rows": [], "rejected": [], "raw": None, "gate_raw": None,
+                "payload": None, "gate_payload": None, "error": None, "gate_error": None}
+
+    gate_payload, gate_to_hero = build_gate_payload(state)
+
+    api_key = os.getenv("OPEN_JEV_KEY")
+    if not api_key:
+        return {"rows": [], "rejected": [], "raw": None, "gate_raw": None,
+                "payload": payload, "gate_payload": gate_payload or None,
+                "error": "OPEN_JEV_KEY is not set", "gate_error": None}
+
+    if gate_payload:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            score_job = pool.submit(_post, payload, api_key, timeout)
+            gate_job = pool.submit(_post, gate_payload, api_key, timeout)
+            body, error = score_job.result()
+            gate_body, gate_error = gate_job.result()
+    else:
+        body, error = _post(payload, api_key, timeout)
+        gate_body, gate_error = None, None
+
+    if error:
+        return {"rows": [], "rejected": [], "raw": body, "gate_raw": gate_body,
+                "payload": payload, "gate_payload": gate_payload or None,
+                "error": error, "gate_error": gate_error}
+
+    # A failed gate request leaves `gates` empty, and apply_gates fails open on
+    # a missing verdict — so a gate outage degrades to the pre-gate behaviour
+    # rather than dropping every note-admitted hero. `gate_error` is returned so
+    # that degradation is visible instead of silent.
+    gates = parse_gates(gate_body, gate_to_hero) if gate_body else {}
+    kept, rejected = apply_gates(parse_answers(body, key_to_hero), gates)
+    return {"rows": kept, "rejected": rejected, "raw": body, "gate_raw": gate_body,
+            "payload": payload, "gate_payload": gate_payload or None,
+            "error": None, "gate_error": gate_error}
 
 
 if __name__ == "__main__":
@@ -386,4 +615,9 @@ if __name__ == "__main__":
         print("No candidates for this draft — nothing to evaluate.")
         sys.exit(0)
     print(json.dumps(body, indent=2)[:4000])
-    print("\nquestion key -> hero:", mapping)
+    print("\nscore key -> hero:", mapping)
+
+    gate_body, gate_map = build_gate_payload(draft)
+    print(f"\n--- gate request (separate, minimal state; threshold {NOUL_GATE_THRESHOLD}) ---")
+    print(json.dumps(gate_body, indent=2)[:2000] if gate_body else "nothing note-admitted")
+    print("\ngate key -> hero:", gate_map)

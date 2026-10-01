@@ -28,6 +28,7 @@ os.chdir(PROJECT_ROOT)  # the RAG/snapshot modules use cwd-relative data paths
 from src.api_client.rone_arena_client import list_heroes, get_hero_rank_stats  # noqa: E402
 from src.rag.add_note import add_note  # noqa: E402
 from src.rag.scoring import RAG_RELEVANCE_THRESHOLD  # noqa: E402
+from src.agents import jev_client  # noqa: E402
 from src.web import notes_store, watcher_control, evidence  # noqa: E402
 
 DEFAULT_PORT = 8600
@@ -301,6 +302,15 @@ def recommend():
         # The panel shows each note's relevance; without the cut-off those
         # numbers don't explain why a candidate scored 0.
         "rag_threshold": RAG_RELEVANCE_THRESHOLD,
+        # Note-admitted heroes dropped by the Jev relevance gate, plus the
+        # threshold they were measured against. Without both, a hero absent
+        # from the list is indistinguishable from one that was never admitted.
+        "gated_out": result.get("gated_out") or [],
+        "gate_threshold": jev_client.NOUL_GATE_THRESHOLD,
+        # The gate is a separate request and fails open. Surfaced so a draft
+        # that quietly stopped being filtered is visible rather than inferred.
+        "jev_gate_raw": result.get("jev_gate_raw"),
+        "jev_gate_error": result.get("jev_gate_error"),
         "elapsed_seconds": elapsed,
         "role_needed": role,
     })
